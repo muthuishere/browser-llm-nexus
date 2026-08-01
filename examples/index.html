@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>browser-llm-nexus — tool calling in the tab</title>
+<style>
+  :root {
+    --bg: #121212; --panel: #1c1e22; --line: #2a2c31; --fg: #f2f3f5;
+    --dim: #888b93; --accent: #3478f6; --accent-soft: #6fa0ff; --ok: #3fb950; --warn: #d29922;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+    display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 100vh;
+  }
+  @media (max-width: 900px) { body { grid-template-columns: 1fr; } aside { border-left: 0 !important; } }
+  main { padding: 24px 28px; min-width: 0; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); padding: 20px; }
+  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.02em; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 22px 0 8px; }
+  h2:first-child { margin-top: 0; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 20px; }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 0 0 14px; }
+  legend { padding: 0 6px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .07em; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 8px 0 4px; }
+  input[type=text], input[type=url], select, textarea {
+    width: 100%; background: #16171a; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 10px; font: 13px var(--mono);
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1 1 140px; min-width: 0; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--accent-soft); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .radios { display: flex; gap: 6px; flex-wrap: wrap; }
+  .radios label {
+    flex: 1 1 auto; margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+    cursor: pointer; text-align: center; font-size: 13px; color: var(--fg); white-space: nowrap;
+  }
+  .radios input { display: none; }
+  .radios input:checked + span { color: var(--accent-soft); font-weight: 600; }
+  .radios label:has(input:checked) { border-color: var(--accent); background: rgba(52,120,246,.1); }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; }
+  .badge {
+    font: 11px var(--mono); padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .badge.on { border-color: var(--accent); color: var(--accent-soft); }
+  progress { width: 100%; height: 6px; margin-top: 12px; accent-color: var(--accent); }
+  #log { font: 12px var(--mono); color: var(--dim); margin-top: 8px; white-space: pre-wrap; max-height: 110px; overflow: auto; }
+  #chat { border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-height: 190px; margin-bottom: 12px; background: var(--panel); }
+  .msg { margin: 0 0 14px; }
+  .msg .who { font: 11px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .07em; }
+  .msg .body { white-space: pre-wrap; margin-top: 3px; }
+  .msg.a .body { color: var(--fg); }
+  .placeholder { color: var(--dim); font-size: 14px; }
+  .calls { list-style: none; padding: 0; margin: 0; font: 12px var(--mono); }
+  .calls li { padding: 8px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
+  .calls li:last-child { border: 0; }
+  .calls .n { color: var(--accent-soft); }
+  .calls .r { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font: 12px var(--mono); }
+  td { padding: 4px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; color: var(--accent-soft); }
+  .hint { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  code { font: 12px var(--mono); background: #242424; padding: 1px 5px; border-radius: 4px; }
+  #toolsrc { font: 12.5px/1.6 var(--mono); resize: vertical; tab-size: 2; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  pre#snippet {
+    font: 12.5px/1.6 var(--mono); background: #16171a; border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px; margin: 0 0 12px; overflow-x: auto; color: var(--fg);
+  }
+  pre#snippet .k { color: var(--accent-soft); }
+  pre#snippet .c { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<main>
+  <h1>browser-llm-nexus</h1>
+  <p class="sub">
+    An LLM running in this tab, with tool calling. <strong>Any ONNX model works</strong> — from the Hub,
+    from a host you control, from a zip URL, or from a file on disk. Same four lines either way,
+    and WebGPU or CPU is decided for you. Nothing you type leaves the page.
+  </p>
+
+  <fieldset>
+    <legend>1 · Where the model comes from — you say, it never guesses</legend>
+
+    <div class="radios" id="sourceKind">
+      <label><input type="radio" name="kind" value="hub" checked /><span>Hugging Face Hub</span></label>
+      <label><input type="radio" name="kind" value="base" /><span>Your own host</span></label>
+      <label><input type="radio" name="kind" value="url" /><span>Archive URL</span></label>
+      <label><input type="radio" name="kind" value="file" /><span>Archive file</span></label>
+    </div>
+
+    <div data-for="hub">
+      <label for="hub">Repo id</label>
+      <input type="text" id="hub" value="onnx-community/Qwen2.5-0.5B-Instruct" list="knownHub" />
+      <datalist id="knownHub">
+        <option value="onnx-community/Qwen2.5-0.5B-Instruct">smallest good tool-caller (~0.5B)</option>
+        <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3, reasoning-aware (~0.6B)</option>
+        <option value="onnx-community/Llama-3.2-1B-Instruct">Llama 3.2 (~1B)</option>
+        <option value="HuggingFaceTB/SmolLM2-360M-Instruct">tiniest, fastest on CPU (~0.36B)</option>
+      </datalist>
+      <p class="hint">Prefilled with a known-good one — press Load and it just works. Any repo serving the standard Transformers.js ONNX layout will do.</p>
+    </div>
+
+    <div data-for="base" hidden>
+      <div class="row">
+        <div><label for="base">Base URL</label><input type="text" id="base" value="/models/" /></div>
+        <div><label for="baseId">Model id</label><input type="text" id="baseId" value="Qwen/Qwen2.5-0.5B-Instruct" /></div>
+      </div>
+      <p class="hint">Files are read from <code>&lt;base&gt;&lt;id&gt;/onnx/…</code> — your CDN, your cache headers.</p>
+    </div>
+
+    <div data-for="url" hidden>
+      <label for="url">Archive URL (.zip)</label>
+      <input type="url" id="url" value="http://localhost:8765/examples/model.zip" />
+      <p class="hint">
+        Restored into the browser cache first, so loading needs no further network.
+        Make one with <code>exportModel(id, { modelsUrl, dtypes: ['q4'] })</code> and serve it —
+        the default above points at this folder.
+      </p>
+    </div>
+
+    <div data-for="file" hidden>
+      <label for="file">Archive file (.zip)</label>
+      <input type="file" id="file" accept=".zip" />
+      <p class="hint">The air-gap path — a model on a USB stick. Same <code>exportModel()</code> zip, no server at all.</p>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <div>
+        <label for="device">Backend</label>
+        <select id="device">
+          <option value="auto">auto — WebGPU, else CPU</option>
+          <option value="webgpu">force webgpu</option>
+          <option value="wasm">force wasm (CPU)</option>
+        </select>
+      </div>
+      <div>
+        <label for="dtype">Quantization</label>
+        <select id="dtype">
+          <option value="auto">auto — probe what's served</option>
+          <option value="q4">q4</option>
+          <option value="q8">q8</option>
+          <option value="fp16">fp16</option>
+          <option value="fp32">fp32</option>
+        </select>
+      </div>
+      <div style="flex:0 0 auto"><button id="load">Load model</button></div>
+    </div>
+
+    <div class="badges">
+      <span class="badge" id="bDevice">device —</span>
+      <span class="badge" id="bDtype">dtype —</span>
+      <span class="badge" id="bModel">model —</span>
+    </div>
+    <progress id="prog" value="0" max="100" hidden></progress>
+    <div id="log"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2 · Your tools — one JS file, edit it live</legend>
+    <p class="hint" style="margin:0 0 8px">
+      Every tool the model can call is defined here, in one file. Change it, hit
+      <strong>Apply tools</strong>, and the model picks it up on the next question — no reload,
+      no rebuild. Each <code>tool(name, description, params, handler)</code> is one callable.
+    </p>
+    <textarea id="toolsrc" spellcheck="false" rows="18"></textarea>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:0 0 auto"><button id="apply">Apply tools</button></div>
+      <div style="flex:0 0 auto"><button class="ghost" id="reset">Reset to sample</button></div>
+      <div id="toolStatus" class="hint" style="align-self:center"></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3 · Ask it something that needs a tool</legend>
+    <div id="chat"><p class="placeholder">Load a model, then press Ask. The question is prefilled and the tools above are already live — the model has to call one to answer correctly.</p></div>
+    <div class="row">
+      <input type="text" id="q" value="What's the weather in Chennai?" disabled />
+      <div style="flex:0 0 auto"><button id="ask" disabled>Ask</button></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" data-q="What's the weather in Chennai?">weather</button>
+      <button class="ghost" data-q="What time is it in Tokyo right now?">time</button>
+      <button class="ghost" data-q="What is 4831 multiplied by 227?">math</button>
+    </div>
+    <p class="hint">
+      The answers are deliberately unguessable — the model can only get them right by calling a tool.
+      Watch the tool log on the right.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>4 · Use it in your app — copy this</legend>
+    <p class="hint" style="margin:0 0 8px">
+      This is the exact code for what you have selected above. It updates as you change the source,
+      the backend, or your tools.
+    </p>
+    <pre id="snippet"></pre>
+    <div class="row">
+      <div style="flex:0 0 auto"><button class="ghost" id="copy">Copy</button></div>
+      <div style="flex:0 0 auto"><button class="ghost" id="copyTools">Copy tools file only</button></div>
+      <div id="copyStatus" class="hint" style="align-self:center"></div>
+    </div>
+  </fieldset>
+</main>
+
+<aside>
+  <h2>Tools registered</h2>
+  <ul class="calls" id="toolList"></ul>
+
+  <h2>Tool calls</h2>
+  <ul class="calls" id="calls"><li style="color:var(--dim)">none yet</li></ul>
+
+  <h2>Metrics</h2>
+  <table id="metrics"><tr><td>—</td><td>—</td></tr></table>
+
+  <h2>Cached weights</h2>
+  <table id="cacheTable"><tr><td>—</td><td>—</td></tr></table>
+  <div class="row" style="margin-top:10px">
+    <div style="flex:0 0 auto"><button class="ghost" id="cacheRefresh">Refresh</button></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="cacheClear" style="color:#f0645a;border-color:#5a2a26">Delete everything</button></div>
+  </div>
+  <p class="hint" id="cacheHint">
+    Weights are cached by the browser after the first load, so a reload is instant.
+    Deleting clears the cached model files <em>and</em> the tools you saved here.
+  </p>
+</aside>
+
+<script type="importmap">
+{
+  "imports": {
+    "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1"
+  }
+}
+</script>
+
+<script type="module">
+import * as transformers from '@huggingface/transformers';
+import { NexusChat, describeSource } from '../dist/index.js';
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e6; };
+
+// ── Source picker ────────────────────────────────────────────────────────────
+document.getElementById('sourceKind').addEventListener('change', (e) => {
+  for (const el of document.querySelectorAll('[data-for]')) el.hidden = el.dataset.for !== e.target.value;
+});
+
+function readSource() {
+  const kind = document.querySelector('input[name=kind]:checked').value;
+  if (kind === 'hub') return { hub: $('hub').value.trim() };
+  if (kind === 'base') return { base: $('base').value.trim(), id: $('baseId').value.trim() };
+  if (kind === 'url') return { archive: $('url').value.trim() };
+  const f = $('file').files[0];
+  if (!f) throw new Error('pick a .zip archive first');
+  return { archive: f };
+}
+
+// ── The tools live in one editable JS file. `tool(...)` is injected by
+//    chat.evalTools() — the decorator pattern as a function. Deliberately
+//    unguessable values, so a correct answer proves a real call happened. ──
+const SAMPLE_TOOLS = `// Every tool the model can call. Edit freely, then "Apply tools".
+// tool(name, description, params, handler)
+
+tool('get_weather', 'Get the current weather for a city. Use this for any weather question.',
+  { city: 'string' },
+  async ({ city }) => {
+    // A real app would fetch() here. Fixed values keep this demo offline and checkable.
+    const table = { chennai: '31C, humid, light haze', tokyo: '18C, clear', london: '9C, drizzle' };
+    return { city, conditions: table[String(city).toLowerCase()] ?? '24C, partly cloudy' };
+  });
+
+tool('get_time', 'Get the current local time in a city. Use this for any question about the time.',
+  { city: 'string' },
+  async ({ city }) => {
+    const zones = { chennai: 'Asia/Kolkata', tokyo: 'Asia/Tokyo', london: 'Europe/London' };
+    const tz = zones[String(city).toLowerCase()] ?? 'UTC';
+    return { city, timezone: tz, time: new Date().toLocaleTimeString('en-GB', { timeZone: tz }) };
+  });
+
+tool('multiply', 'Multiply two numbers exactly. Use this for arithmetic — never calculate it yourself.',
+  { a: 'number', b: 'number' },
+  async ({ a, b }) => ({ product: Number(a) * Number(b) }));
+
+// Try adding your own — it is live on the next question:
+//
+// tool('get_stock', 'Look up a stock price by ticker.',
+//   { ticker: 'string' },
+//   async ({ ticker }) => ({ ticker, price: 431.20 }));
+`;
+
+const SAVED = 'nexus-demo-tools';
+$('toolsrc').value = localStorage.getItem(SAVED) ?? SAMPLE_TOOLS;
+
+/** Register whatever the editor currently defines. Replaces the whole set. */
+async function applyTools() {
+  const code = $('toolsrc').value;
+  localStorage.setItem(SAVED, code);
+  if (!chat) {
+    $('toolStatus').textContent = 'saved — will apply when the model loads';
+    return;
+  }
+  try {
+    const names = await chat.evalTools(code);
+    $('toolList').innerHTML = names.map((n) => `<li><span class="n">${n}</span></li>`).join('');
+    $('toolStatus').innerHTML = `<span style="color:var(--ok)">✓ ${names.length} tool${names.length === 1 ? '' : 's'} live</span>`;
+  } catch (e) {
+    $('toolStatus').innerHTML = `<span style="color:var(--warn)">✗ ${e.message}</span>`;
+  }
+}
+
+$('apply').addEventListener('click', applyTools);
+$('reset').addEventListener('click', () => { $('toolsrc').value = SAMPLE_TOOLS; applyTools(); });
+
+// ── Load ─────────────────────────────────────────────────────────────────────
+let chat = null;
+
+$('load').addEventListener('click', async () => {
+  let source;
+  try { source = readSource(); } catch (e) { log('✗ ' + e.message); return; }
+
+  $('load').disabled = true;
+  $('prog').hidden = false;
+  $('log').textContent = '';
+  log('source: ' + describeSource(source));
+
+  const seen = new Set();
+  try {
+    const t0 = performance.now();
+    chat = await NexusChat.load(source, {
+      transformers,                                   // injected, not fetched
+      device: $('device').value,
+      dtype: $('dtype').value,
+      onProgress: (p) => {
+        if (p.status === 'progress' && p.file) {
+          $('prog').value = p.progress ?? 0;
+          if (!seen.has(p.file)) { seen.add(p.file); log('↓ ' + p.file); }
+        }
+      },
+    });
+
+    await applyTools();   // whatever the editor currently defines
+
+    chat.on('toolCall', (call, result) => {
+      if ($('calls').firstElementChild?.style.color) $('calls').innerHTML = '';
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="n">${call.name}</span>(${JSON.stringify(call.arguments)})<br /><span class="r">→ ${JSON.stringify(result)}</span>`;
+      $('calls').append(li);
+    });
+
+    $('bDevice').textContent = 'device ' + chat.device;
+    $('bDtype').textContent = 'dtype ' + chat.dtype;
+    $('bModel').textContent = chat.modelId;
+    for (const id of ['bDevice', 'bDtype', 'bModel']) $(id).classList.add('on');
+    log(`✓ ready in ${((performance.now() - t0) / 1000).toFixed(1)}s — ${chat.device} / ${chat.dtype}`);
+
+    $('q').disabled = $('ask').disabled = false;
+    $('chat').innerHTML = '<p class="placeholder">Ready. Ask something a tool has to answer.</p>';
+    refreshMetrics();
+    refreshCache();
+  } catch (e) {
+    log('✗ ' + (e?.message ?? e));
+  } finally {
+    $('prog').hidden = true;
+    $('load').disabled = false;
+  }
+});
+
+// ── Ask ──────────────────────────────────────────────────────────────────────
+function bubble(who, cls) {
+  if ($('chat').querySelector('.placeholder')) $('chat').innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.innerHTML = `<div class="who">${who}</div><div class="body"></div>`;
+  $('chat').append(d);
+  $('chat').scrollTop = 1e6;
+  return d.querySelector('.body');
+}
+
+async function ask(text) {
+  if (!chat || !text.trim()) return;
+  $('ask').disabled = $('q').disabled = true;
+  bubble('you', 'u').textContent = text;
+  const out = bubble('assistant', 'a');
+  out.textContent = '…';
+
+  let first = true;
+  const onToken = (t) => { if (first) { out.textContent = ''; first = false; } out.textContent += t; };
+  chat.on('token', onToken);
+  try {
+    const answer = await chat.chat(text);
+    out.textContent = answer;
+  } catch (e) {
+    out.textContent = '✗ ' + (e?.message ?? e);
+  } finally {
+    chat.off('token', onToken);
+    refreshMetrics();
+    $('ask').disabled = $('q').disabled = false;
+    $('q').value = '';
+    $('q').focus();
+  }
+}
+
+$('ask').addEventListener('click', () => ask($('q').value));
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask($('q').value); });
+for (const b of document.querySelectorAll('button[data-q]')) {
+  b.addEventListener('click', () => ask(b.dataset.q));
+}
+
+function refreshMetrics() {
+  const s = chat?.metrics?.summary?.() ?? {};
+  const rows = Object.entries(s);
+  $('metrics').innerHTML = rows.length
+    ? rows.map(([k, v]) => `<tr><td>${k}</td><td>${typeof v === 'number' ? v.toFixed(2) : v}</td></tr>`).join('')
+    : '<tr><td>—</td><td>—</td></tr>';
+}
+
+// ── Copyable snippet, generated from whatever is selected right now ──────────
+function sourceLiteral() {
+  const kind = document.querySelector('input[name=kind]:checked').value;
+  if (kind === 'hub') return `{ hub: '${$('hub').value.trim()}' }`;
+  if (kind === 'base') return `{ base: '${$('base').value.trim()}', id: '${$('baseId').value.trim()}' }`;
+  if (kind === 'url') return `{ archive: '${$('url').value.trim() || 'https://host/model.zip'}' }`;
+  return `{ archive: fileFromInput }`;
+}
+
+function buildSnippet() {
+  const opts = [];
+  if ($('device').value !== 'auto') opts.push(`device: '${$('device').value}'`);
+  if ($('dtype').value !== 'auto') opts.push(`dtype: '${$('dtype').value}'`);
+  const optStr = opts.length ? `, { ${opts.join(', ')} }` : '';
+  const kind = document.querySelector('input[name=kind]:checked').value;
+
+  const notes = {
+    hub: 'weights come from the Hugging Face Hub',
+    base: 'weights come from a host you control',
+    url: 'a portable archive — restored into the cache, then loads offline',
+    file: 'a file the user picked — the air-gap path',
+  };
+
+  return `npm install browser-llm-nexus @huggingface/transformers
+
+import { NexusChat } from 'browser-llm-nexus';
+
+// ${notes[kind]}
+const chat = await NexusChat.load(${sourceLiteral()}${optStr});
+
+// your tools — one file, any number of them
+await chat.evalTools(toolsSource);
+
+chat.on('token', t => render(t));
+chat.on('toolCall', (call, result) => console.log(call.name, result));
+
+const answer = await chat.chat('What is the weather in Chennai?');`;
+}
+
+function refreshSnippet() {
+  const html = buildSnippet()
+    .replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])
+    .replace(/^(\/\/.*)$/gm, '<span class="c">$1</span>');
+  $('snippet').innerHTML = html;
+}
+
+async function copy(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    $('copyStatus').innerHTML = `<span style="color:var(--ok)">✓ ${label} copied</span>`;
+  } catch {
+    $('copyStatus').textContent = 'clipboard blocked — select and copy manually';
+  }
+  setTimeout(() => ($('copyStatus').textContent = ''), 2500);
+}
+
+$('copy').addEventListener('click', () => copy(buildSnippet(), 'snippet'));
+$('copyTools').addEventListener('click', () => copy($('toolsrc').value, 'tools file'));
+for (const el of ['sourceKind', 'hub', 'base', 'baseId', 'url', 'device', 'dtype']) {
+  $(el)?.addEventListener('input', refreshSnippet);
+  $(el)?.addEventListener('change', refreshSnippet);
+}
+refreshSnippet();
+
+// ── Cache: what's stored, and a real delete ──────────────────────────────────
+// The library caches model files under 'transformers-cache' (exported as
+// CACHE_NAME). Clearing must drop the Cache Storage entries, not just our
+// localStorage — otherwise "cleared" still costs the user a 400MB re-download
+// of nothing, or worse, silently keeps weights they asked to remove.
+const fmt = (b) => (b > 1 << 30 ? (b / (1 << 30)).toFixed(2) + ' GB' : (b / (1 << 20)).toFixed(1) + ' MB');
+
+async function refreshCache() {
+  if (!('caches' in window)) {
+    $('cacheTable').innerHTML = '<tr><td>Cache API</td><td>unavailable</td></tr>';
+    return;
+  }
+  const names = await caches.keys();
+  const rows = [];
+  let files = 0;
+  for (const name of names) {
+    const cache = await caches.open(name);
+    const keys = await cache.keys();
+    if (!keys.length) continue;
+    files += keys.length;
+    rows.push(`<tr><td>${name}</td><td>${keys.length} file${keys.length === 1 ? '' : 's'}</td></tr>`);
+  }
+  const est = navigator.storage?.estimate ? await navigator.storage.estimate() : null;
+  if (est?.usage) rows.push(`<tr><td>on disk</td><td>${fmt(est.usage)}</td></tr>`);
+  const saved = localStorage.getItem(SAVED);
+  if (saved) rows.push(`<tr><td>saved tools</td><td>${(saved.length / 1024).toFixed(1)} KB</td></tr>`);
+  $('cacheTable').innerHTML = rows.length ? rows.join('') : '<tr><td>empty</td><td>—</td></tr>';
+  return files;
+}
+
+$('cacheRefresh').addEventListener('click', refreshCache);
+
+$('cacheClear').addEventListener('click', async () => {
+  const files = await refreshCache();
+  if (!confirm(`Delete every cached model file (${files ?? 0}) and your saved tools?\n\nThe next load will download the weights again.`)) return;
+
+  $('cacheClear').disabled = true;
+  try {
+    for (const name of await caches.keys()) await caches.delete(name);   // the weights
+    localStorage.removeItem(SAVED);                                       // the saved tools
+    $('toolsrc').value = SAMPLE_TOOLS;
+    chat = null;
+    $('q').disabled = $('ask').disabled = true;
+    for (const id of ['bDevice', 'bDtype', 'bModel']) $(id).classList.remove('on');
+    $('bDevice').textContent = 'device —';
+    $('bDtype').textContent = 'dtype —';
+    $('bModel').textContent = 'model —';
+    $('toolStatus').textContent = '';
+    $('calls').innerHTML = '<li style="color:var(--dim)">none yet</li>';
+    $('toolList').innerHTML = '';
+    $('chat').innerHTML = '<p class="placeholder">Cache cleared. Load a model to start again.</p>';
+    log('✓ cache cleared — weights and saved tools removed');
+    await refreshCache();
+  } finally {
+    $('cacheClear').disabled = false;
+  }
+});
+
+refreshCache();
+
+// Expose for scripted checks.
+window.__nexus = { get chat() { return chat; }, ask, applyTools, refreshCache };
+</script>
+</body>
+</html>
