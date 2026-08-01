@@ -2,7 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fflate from 'fflate';
-import { resolveSource, describeSource, hubRoot } from '../dist/source.js';
+import { resolveSource, describeSource, hubRoot, dtypeProbe } from '../dist/source.js';
+import { detectDtype } from '../dist/runtime.js';
 import { exportModel } from '../dist/model.js';
 
 const fakeEnv = () => ({ env: {} });
@@ -72,4 +73,40 @@ test('describeSource is readable for logs', () => {
 test('hubRoot builds Hugging Face file URLs', () => {
   assert.equal(hubRoot('onnx-community/X'), 'https://huggingface.co/onnx-community/X/resolve/main/');
   assert.equal(hubRoot('a/b', 'dev'), 'https://huggingface.co/a/b/resolve/dev/');
+});
+
+// A hub source never sets env.localModelPath, so dtype probing has to be told
+// where the Hub keeps the files — otherwise it probes whatever stale local base
+// happens to be set and every variant 404s.
+test('hub source probes dtypes on the Hub, not the local base', () => {
+  const tjs = { env: { localModelPath: '/models/' } };
+  const probe = dtypeProbe({ hub: 'onnx-community/Qwen3-0.6B-ONNX' }, tjs);
+  assert.equal(
+    probe('model_q4.onnx'),
+    'https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/onnx/model_q4.onnx',
+  );
+});
+
+test('hub dtype probing honors a configured mirror', () => {
+  const tjs = { env: { remoteHost: 'https://mirror.internal/hf/' } };
+  const probe = dtypeProbe({ hub: 'a/b' }, tjs);
+  assert.equal(probe('model.onnx'), 'https://mirror.internal/hf/a/b/resolve/main/onnx/model.onnx');
+});
+
+test('base and archive sources need no probe override', () => {
+  assert.equal(dtypeProbe({ base: '/models/', id: 'a/b' }, { env: {} }), undefined);
+  assert.equal(dtypeProbe({ archive: 'https://host/m.zip' }, { env: {} }), undefined);
+});
+
+test('detectDtype picks the first variant the Hub actually serves', async () => {
+  const served = new Set(['https://huggingface.co/a/b/resolve/main/onnx/model_q4.onnx']);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({ ok: served.has(url) });
+  try {
+    const tjs = { env: {} };
+    const dtype = await detectDtype(tjs, 'a/b', 'wasm', dtypeProbe({ hub: 'a/b' }, tjs));
+    assert.equal(dtype, 'q4');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

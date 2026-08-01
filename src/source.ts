@@ -6,7 +6,7 @@
  */
 import { importModel } from './model.ts';
 import type { ArchiveSource, ZipLike } from './archive.ts';
-import type { TransformersLike } from './runtime.ts';
+import type { DtypeProbe, TransformersLike } from './runtime.ts';
 
 export type ModelSource =
   /** A portable model archive: a URL, a File from an <input>, a Blob, or bytes.
@@ -55,6 +55,20 @@ export async function resolveSource(tjs: TransformersLike, source: ModelSource):
   tjs.env.allowRemoteModels = false;
   tjs.env.localModelPath = withSlash(base);
   return manifest.modelId;
+}
+
+/** Where to probe for a model's dtype variants.
+ *
+ *  `base` and `archive` sources point `env.localModelPath` at their files, so
+ *  the default probe already finds them. A `hub` source deliberately leaves
+ *  that path alone — its files live at `<host><repo>/resolve/<revision>/`, which
+ *  no local base ever points at — so it must say where to look. */
+export function dtypeProbe(source: ModelSource, tjs: TransformersLike): DtypeProbe | undefined {
+  if (!('hub' in source)) return undefined;
+  const host: string = tjs.env.remoteHost ?? 'https://huggingface.co/';
+  const template: string = tjs.env.remotePathTemplate ?? '{model}/resolve/{revision}/';
+  const repoPath = template.replace('{model}', source.hub).replace('{revision}', 'main');
+  return (file) => `${withSlash(host)}${repoPath}onnx/${file}`;
 }
 
 /** Human-readable description of a source, for logs and metrics. */

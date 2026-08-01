@@ -50,14 +50,31 @@ export function preferredDtypeOrder(device: string): readonly string[] {
   return device === 'webgpu' ? (['fp16', 'q4', 'q8', 'fp32'] as const) : DTYPE_ORDER;
 }
 
+/** Builds the location of one of a model's dtype files. Sources differ in
+ *  layout — a served folder puts them at `<base><id>/onnx/…`, the Hub at
+ *  `<host><repo>/resolve/<revision>/onnx/…` — so the source decides, not this
+ *  module. See `dtypeProbe` in source.ts. */
+export type DtypeProbe = (file: string) => string;
+
 /** Probe which dtype variants exist for a model and return the best one for
- *  this backend. Works for any host serving the standard onnx/ layout. */
-export async function detectDtype(tjs: TransformersLike, modelId: string, device = 'wasm'): Promise<string> {
+ *  this backend. Works for any host serving the standard onnx/ layout.
+ *
+ *  Without a `probe`, falls back to the local-model base — correct for `base`
+ *  and `archive` sources, which point `env.localModelPath` at their files. A
+ *  `hub` source has no local base and must pass one. */
+export async function detectDtype(
+  tjs: TransformersLike,
+  modelId: string,
+  device = 'wasm',
+  probe?: DtypeProbe,
+): Promise<string> {
   const base: string | undefined = tjs.env.localModelPath;
-  if (!base) throw new Error('cannot probe dtypes without a base URL — pass an explicit dtype');
-  const httpBase = /^https?:\/\//.test(base);
+  if (!probe && !base) throw new Error('cannot probe dtypes without a base URL — pass an explicit dtype');
+  const at: DtypeProbe =
+    probe ?? ((file) => `${base}${base!.endsWith('/') ? '' : '/'}${modelId}/onnx/${file}`);
   for (const d of preferredDtypeOrder(device)) {
-    const path = `${base}${base.endsWith('/') ? '' : '/'}${modelId}/onnx/${DTYPE_FILES[d]}`;
+    const path = at(DTYPE_FILES[d]!);
+    const httpBase = /^https?:\/\//.test(path);
     try {
       if (httpBase) {
         const res = await fetch(path, { method: 'HEAD' });
@@ -72,5 +89,5 @@ export async function detectDtype(tjs: TransformersLike, modelId: string, device
       }
     } catch { /* keep probing */ }
   }
-  throw new Error(`no dtype variant found for ${modelId} under ${base}`);
+  throw new Error(`no dtype variant found for ${modelId} under ${at('onnx/')}`);
 }
