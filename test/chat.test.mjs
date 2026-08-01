@@ -410,20 +410,102 @@ test('prompt and raw hooks expose every round', async () => {
 // This is the failure seen on the live demo: tools registered, one generation,
 // zero tool calls, and a degenerate repetition returned as the answer. Without
 // the raw hook it is indistinguishable from a parser bug.
-test('a model that answers instead of calling is visible, not silent', async () => {
+// The live-demo failure: the model narrates instead of calling. The library
+// no longer accepts that — it regenerates with the call syntax already open,
+// which leaves no continuation that isn't a call.
+test('a model that answers instead of calling is forced to call', async () => {
   const degenerate = 'The weather in Chennai is described as follows: '.repeat(6);
-  const { chat, llm } = await chatWith({ script: [degenerate] });
-  weather(chat);
-  const seen = [];
-  chat.on('raw', (text, calls, round) => seen.push({ round, calls: calls.length, text }));
+  const { chat, llm } = await chatWith({
+    // 1st: prose. 2nd (forced): completes the primed call. 3rd: the answer.
+    script: [degenerate, 'get_weather", "arguments": {"city": "Chennai"}}\n</tool_call>', 'It is 31C.'],
+  });
+  const spy = {};
+  weather(chat, spy);
 
   const answer = await chat.chat("What's the weather in Chennai?");
 
-  assert.equal(llm.rounds, 1, 'one generation, exactly what the metrics showed');
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].calls, 0, 'nothing parsed — the model never called');
-  assert.equal(chat.metrics.counters.get('tool_calls'), undefined);
-  assert.equal(answer, degenerate.trim(), 'the raw text became the answer');
+  assert.equal(spy.city, 'Chennai', 'the tool ran despite the model declining');
+  assert.equal(answer, 'It is 31C.');
+  assert.equal(chat.metrics.counters.get('tool_calls_forced'), 1);
+  assert.equal(chat.metrics.counters.get('tool_calls_ok'), 1);
+  assert.equal(llm.rounds, 3, 'free turn, forced turn, answer turn');
+});
+
+test('the forced turn primes the prompt with the call syntax', async () => {
+  const { chat, llm } = await chatWith({
+    script: ['just prose', 'get_weather", "arguments": {"city": "Chennai"}}\n</tool_call>', 'done'],
+  });
+  weather(chat);
+  await chat.chat('weather?');
+
+  // The system prompt contains a <tool_call> EXAMPLE, so presence proves
+  // nothing — priming is about what the prompt ENDS with, i.e. what the model
+  // has to continue from.
+  assert.doesNotMatch(llm.generated[0].prompt, /\{"name": "$/, 'the free turn is not primed');
+  assert.match(llm.generated[1].prompt, /<tool_call>\n\{"name": "$/, 'the forced turn is');
+});
+
+// A forced call is only worth keeping if it names a real tool. A hallucinated
+// name is worse than the answer the model gave us unprompted.
+test('a forced call naming an unknown tool is discarded, not dispatched', async () => {
+  const prose = 'I cannot help with that.';
+  const { chat } = await chatWith({
+    script: [prose, 'not_a_real_tool", "arguments": {}}\n</tool_call>'],
+  });
+  weather(chat);
+
+  const answer = await chat.chat('hello');
+
+  assert.equal(answer, prose, 'the original answer survives');
+  assert.equal(chat.metrics.counters.get('tool_calls_force_failed'), 1);
+  assert.equal(chat.metrics.counters.get('tool_calls'), undefined, 'nothing dispatched');
+});
+
+test('forcing never happens once tool results exist', async () => {
+  const { chat, llm } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'],
+  });
+  weather(chat);
+
+  await chat.chat('weather?');
+
+  assert.equal(chat.metrics.counters.get('tool_calls_forced'), undefined);
+  assert.equal(llm.rounds, 2, 'no extra generation — the answer turn is allowed to be prose');
+});
+
+test('toolChoice:none leaves a declining model alone', async () => {
+  const prose = 'I think it is warm.';
+  const { chat, llm } = await chatWith({ script: [prose] });
+  weather(chat);
+
+  const answer = await chat.chat('weather?', { toolChoice: 'none' });
+
+  assert.equal(answer, prose);
+  assert.equal(llm.rounds, 1, 'no forced retry');
+  assert.equal(chat.metrics.counters.get('tool_calls_forced'), undefined);
+});
+
+test('toolChoice:required skips the free turn entirely', async () => {
+  const { chat, llm } = await chatWith({
+    script: ['get_weather", "arguments": {"city": "Chennai"}}\n</tool_call>', 'It is 31C.'],
+  });
+  const spy = {};
+  weather(chat, spy);
+
+  const answer = await chat.chat('weather?', { toolChoice: 'required' });
+
+  assert.equal(spy.city, 'Chennai');
+  assert.equal(answer, 'It is 31C.');
+  assert.match(llm.generated[0].prompt, /<tool_call>\n\{"name": "$/, 'primed from round 0');
+  assert.equal(llm.rounds, 2, 'no wasted free turn');
+});
+
+test('no tools registered: nothing is ever forced', async () => {
+  const { chat, llm } = await chatWith({ script: ['just chatting'] });
+  const answer = await chat.chat('hello');
+  assert.equal(answer, 'just chatting');
+  assert.equal(llm.rounds, 1);
+  assert.equal(chat.metrics.counters.get('tool_calls_forced'), undefined);
 });
 
 test('a call to an unregistered tool is distinguishable from no call', async () => {
@@ -450,4 +532,35 @@ test('the prompt hook shows tool results arriving in round 2', async () => {
 
   assert.doesNotMatch(prompts[0], /tool_response/, 'round 1 has no results yet');
   assert.match(prompts[1], /<tool_response>[\s\S]*31C, humid/, 'round 2 carries the result');
+});
+
+test('the forced attempt is observable even when discarded', async () => {
+  const { chat } = await chatWith({
+    script: ['I think it is warm.', 'rain", "arguments": {"station_id": "CHM01"}}'],
+  });
+  weather(chat);
+  const attempts = [];
+  chat.on('forced', (text, salvaged, round) => attempts.push({ text, salvaged, round }));
+
+  await chat.chat('weather?');
+
+  assert.equal(attempts.length, 1, 'the forced turn is reported');
+  assert.equal(attempts[0].salvaged, null, 'nothing trustworthy came back');
+  assert.match(attempts[0].text, /rain/, 'the hallucinated name is visible');
+});
+
+// Safety: a model that names a tool it was not given must never be quietly
+// mapped onto whatever tool happens to be registered. Calling the wrong tool
+// is worse than not calling one.
+test('a hallucinated name is never mapped onto the only registered tool', async () => {
+  const { chat } = await chatWith({
+    script: ['prose', 'launch_missiles", "arguments": {}}'],
+  });
+  let ran = false;
+  chat.tool('delete_account', 'Delete the account', {}, async () => { ran = true; return {}; });
+
+  await chat.chat('hello');
+
+  assert.equal(ran, false, 'the single registered tool was NOT dispatched');
+  assert.equal(chat.metrics.counters.get('tool_calls_force_failed'), 1);
 });

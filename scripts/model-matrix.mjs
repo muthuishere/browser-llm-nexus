@@ -32,17 +32,18 @@ const DTYPES = arg('dtypes', ['q4', 'q8', 'fp16']);
 // Deliberately unguessable answers: a correct final answer PROVES a real call.
 const TOOLS = [
   ['get_weather', 'Get the current weather for a city. Use this for any weather question.', { city: 'string' },
-    async ({ city }) => ({ city, conditions: '31C, humid, light haze' })],
+    async ({ city }) => ({ city, conditions: '31C, humid, light haze', stationId: 'WX-4417' })],
   ['get_time', 'Get the current local time in a city. Use this for any question about the time.', { city: 'string' },
-    async ({ city }) => ({ city, time: '19:47' })],
+    async ({ city }) => ({ city, time: '19:47', clockId: 'TZ-9082' })],
   ['multiply', 'Multiply two numbers exactly. Use this for arithmetic — never calculate it yourself.',
     { a: 'number', b: 'number' }, async ({ a, b }) => ({ product: Number(a) * Number(b) })],
 ];
 
 const CASES = [
-  { q: "What's the weather in Chennai?", tool: 'get_weather', proof: /31\s*c|31\s*deg|humid|haze/i },
+  // Proof tokens are unguessable by construction: only a real call reveals them.
+  { q: "What's the weather in Chennai? Include the station id.", tool: 'get_weather', proof: /WX-?4417/i },
   { q: 'What is 4831 multiplied by 227?', tool: 'multiply', proof: /1[,.]?096[,.]?637/ },
-  { q: 'What time is it in Tokyo right now?', tool: 'get_time', proof: /19[:.]47/ },
+  { q: 'What time is it in Tokyo right now? Include the clock id.', tool: 'get_time', proof: /TZ-?9082/i },
 ];
 
 const rows = [];
@@ -74,17 +75,21 @@ for (const model of MODELS) {
         answer = `ERROR: ${e.message}`;
       }
       const grounded = c.proof.test(answer);
+      const forced = chat.metrics.counters.get('tool_calls_forced') ?? 0;
+      const forceFailed = chat.metrics.counters.get('tool_calls_force_failed') ?? 0;
       // A model stuck repeating itself is a distinct, recognisable failure.
       const degenerate = /(.{25,}?)\1{2,}/.test(rawFirst);
       rows.push({
         model, dtype, load: `${loadS}s`, q: c.q.slice(0, 24),
         want: c.tool, called: called ?? '—',
-        right: called === c.tool, grounded, degenerate,
+        right: called === c.tool, grounded, degenerate, forced, forceFailed,
         answer: answer.replace(/\s+/g, ' ').slice(0, 70),
       });
       console.error(
         `${called === c.tool && grounded ? '✓' : '✗'} ${model} ${dtype} ` +
-        `| ${c.tool} -> ${called ?? 'none'} | grounded:${grounded}${degenerate ? ' | DEGENERATE' : ''}`,
+        `| ${c.tool} -> ${called ?? 'none'} | grounded:${grounded}` +
+        `${forced ? ` | forced:${forced}` : ''}${forceFailed ? ` FORCE-FAILED:${forceFailed}` : ''}` +
+        `${degenerate ? ' | DEGENERATE' : ''}`,
       );
     }
     await chat.dispose().catch(() => {});

@@ -1,6 +1,6 @@
 import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
-import { parseToolCalls, stripThinking, type ToolCall } from './toolcalls.ts';
+import { parseToolCalls, salvageToolCall, stripThinking, type ToolCall } from './toolcalls.ts';
 import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
 import { dtypeProbe, resolveSource, type ModelSource } from './source.ts';
 
@@ -31,6 +31,14 @@ export interface LoadOptions extends RuntimeOptions {
 
 export interface ChatOptions {
   maxNewTokens?: number;
+  /** Whether a tool call is optional or mandatory for this turn.
+   *
+   *  'auto' (default) — generate normally; if the model produced no tool call
+   *  and tools are registered, generate ONCE more with the call syntax already
+   *  started, which leaves it no way to answer except by completing a call.
+   *  'required'  — start the call syntax immediately, skipping the free turn.
+   *  'none'      — never force; the model answers or it doesn't. */
+  toolChoice?: 'auto' | 'required' | 'none';
 }
 
 type ChatEvents = {
@@ -47,6 +55,11 @@ type ChatEvents = {
    *  "The model answered instead of calling" and "the model called but we
    *  failed to parse it" look identical from the outside without this. */
   raw: [string, ToolCall[], number];
+  /** A forced attempt: the primed generation, what was salvaged from it (null
+   *  if nothing trustworthy), and the round. Without this a discarded forced
+   *  turn is invisible — you see "no tool call" and cannot tell whether the
+   *  model refused, named something unregistered, or emitted unparseable text. */
+  forced: [string, ToolCall | null, number];
 };
 
 /** Tool-calling chat over a converted browser model.
@@ -59,9 +72,23 @@ type ChatEvents = {
 export class NexusChat extends Hooks<ChatEvents> {
   readonly metrics = new Metrics();
   maxRounds = 4;
-  /** Steers the model *toward* calling a tool, before any results exist. */
+  /** Steers the model *toward* calling a tool, before any results exist.
+   *
+   *  Small models follow a worked example far better than an instruction, so
+   *  this shows the exact bytes expected rather than describing them. Measured
+   *  on Qwen2.5-0.5B: the earlier prose-only prompt left q8 calling 0/3. */
   systemPrompt =
-    'You have access to tools. When a question relates to a tool, you MUST call the tool instead of guessing or inventing data. Answer from tool results.';
+    'You have access to tools. You MUST call a tool instead of guessing, ' +
+    'calculating, or inventing data — even if you think you know the answer.\n' +
+    'To call a tool, reply with ONLY this, and nothing else:\n' +
+    '<tool_call>\n{"name": "the_tool_name", "arguments": {"arg": "value"}}\n</tool_call>\n' +
+    'Do not explain what you are about to do. Do not describe the tool. ' +
+    'Emit the tool call itself.';
+
+  /** How a forced tool call is started. The parser accepts this tag from any
+   *  model family, so priming it works even where the model was trained on a
+   *  different call syntax. */
+  toolCallPrefix = '<tool_call>\n{"name": "';
   /** Replaces `systemPrompt` once tool results are in the conversation.
    *
    *  These have to be two different instructions. "You MUST call the tool
@@ -160,7 +187,7 @@ export class NexusChat extends Hooks<ChatEvents> {
     return [...this.tools.keys()];
   }
 
-  private async generate(opts: ChatOptions, round = 0): Promise<string> {
+  private async generate(opts: ChatOptions, round = 0, prefix = ''): Promise<string> {
     const tok = this.generator.tokenizer;
     // Once results are in, swap the call-phase instruction for the answer-phase
     // one. Only our own injected system message is touched — a system message
@@ -171,12 +198,17 @@ export class NexusChat extends Hooks<ChatEvents> {
           m.role === 'system' && m.content === this.systemPrompt ? { ...m, content: this.answerPrompt } : m,
         )
       : this.messages;
-    const prompt: string = tok.apply_chat_template(messages, {
-      tools: this.tools.size ? this.toolSchemas : undefined,
-      tokenize: false,
-      add_generation_prompt: true,
-      enable_thinking: false,
-    });
+    // A prefix is appended AFTER the generation prompt, so the model resumes
+    // mid-token-stream with the call syntax already open. There is no valid
+    // continuation that is prose — that is what makes the call happen rather
+    // than merely being requested.
+    const prompt: string =
+      tok.apply_chat_template(messages, {
+        tools: this.tools.size ? this.toolSchemas : undefined,
+        tokenize: false,
+        add_generation_prompt: true,
+        enable_thinking: false,
+      }) + prefix;
     this.emit('prompt', prompt, round);
     let tokens = 0;
     const streamer = this.tjs.TextStreamer
@@ -197,7 +229,9 @@ export class NexusChat extends Hooks<ChatEvents> {
       }),
     );
     this.metrics.count('tokens_out', tokens);
-    return out[0].generated_text as string;
+    // The prefix was our text, not the model's, but the parser has to see the
+    // whole call — so stitch it back on.
+    return prefix + (out[0].generated_text as string);
   }
 
   /** Chat with the automatic tool loop; returns the final grounded answer. */
@@ -208,11 +242,48 @@ export class NexusChat extends Hooks<ChatEvents> {
     this.messages.push({ role: 'user', content: userText });
     this.metrics.count('chats');
 
+    const choice = opts.toolChoice ?? 'auto';
+    const answered = () => this.messages.some((m) => m.role === 'tool');
+
     for (let round = 0; round < this.maxRounds; round++) {
       this.emit('round', round);
-      const raw = await this.generate(opts, round);
-      const parsed = parseToolCalls(raw);
-      const calls = parsed.filter((c) => this.tools.has(c.name));
+      // 'required' skips the free turn on the first round; after results exist
+      // the model must be free to answer, or the loop could never terminate.
+      const forceNow = choice === 'required' && !answered();
+      let raw = await this.generate(opts, round, forceNow ? this.toolCallPrefix : '');
+      let parsed = parseToolCalls(raw);
+      let calls = parsed.filter((c) => this.tools.has(c.name));
+
+      // The model declined to call anything. Asking again politely does not
+      // work on small models — so generate once more with the call syntax
+      // already open, leaving no continuation that isn't a call. Only before
+      // any results exist: afterwards, "no call" is the correct final answer.
+      if (!calls.length && choice === 'auto' && this.tools.size && !answered() && !forceNow) {
+        this.metrics.count('tool_calls_forced');
+        const forced = await this.generate(opts, round, this.toolCallPrefix);
+        // Lenient on purpose: a primed small model routinely emits nearly-valid
+        // JSON, and discarding a correctly-named call over a missing brace
+        // wastes the whole forced turn.
+        const salvaged = salvageToolCall(forced, [...this.tools.keys()]);
+        this.emit('forced', forced, salvaged, round);
+        const forcedParsed = salvaged ? [salvaged] : parseToolCalls(forced);
+        const forcedCalls = forcedParsed.filter((c) => this.tools.has(c.name));
+        // Keep the forced turn only if it named a real tool; a hallucinated
+        // name is worse than the answer the model gave us unprompted.
+        if (forcedCalls.length) {
+          raw = forced;
+          parsed = forcedParsed;
+          calls = forcedCalls;
+        } else {
+          // Loud on purpose. The model was handed open call syntax and still
+          // could not name a registered tool — that is a capability limit, not
+          // a transient miss, and silently returning its prose hides it.
+          this.metrics.count('tool_calls_force_failed');
+          const named = forced.match(/"name"\s*:\s*"([^"]{1,40})"/)?.[1];
+          if (named) this.emit('metric', `forced_call_named_unknown_tool:${named}`, 1);
+        }
+      }
+
       // Emit what was parsed, not just what survived the name filter — a call
       // to a tool that isn't registered is a different problem from no call at
       // all, and both end the loop the same silent way.

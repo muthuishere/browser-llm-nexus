@@ -52,9 +52,61 @@ chat.on('token', t => render(t));
 chat.on('toolCall', (call, result) => console.log(call.name, call.arguments, result));
 ```
 
-A default system prompt pushes against hallucination — *"When a question relates to a
-tool, you MUST call the tool instead of guessing or inventing data. Answer from tool
-results."* Override it with `chat.systemPrompt = '…'`.
+The default system prompt shows the model the exact bytes of a tool call rather than
+describing them — small models copy a worked example far better than they follow an
+instruction. Two prompts are used: `chat.systemPrompt` while deciding whether to call,
+and `chat.answerPrompt` once results are in context. Both are overridable.
+
+## Making the call happen
+
+A small model will sometimes answer a question it should have used a tool for.
+The library does not accept that. If a turn produces no tool call while tools are
+registered, it generates **once more with the call syntax already open** —
+
+```
+<tool_call>
+{"name": "
+```
+
+— leaving no continuation that isn't a call. The completion is parsed leniently
+(unterminated JSON, trailing prose and a name in the wrong case are all
+recovered), and the result is kept **only if it names a tool you registered**.
+
+```ts
+await chat.chat(question);                              // auto: force only if needed
+await chat.chat(question, { toolChoice: 'required' });  // skip the free turn
+await chat.chat(question, { toolChoice: 'none' });      // never force
+```
+
+:::caution[A hallucinated name is never remapped]
+If the forced turn names a tool that does not exist, it is discarded — even when
+you registered exactly one tool. Calling the wrong tool is worse than calling
+none, and "it asked for `launch_missiles`, we have `delete_account`, close
+enough" is how that goes wrong. You get the model's original answer, plus a
+`tool_calls_force_failed` metric and a `forced` event carrying the raw text.
+:::
+
+## Which models actually call tools
+
+Forcing raises the floor; it does not create ability the weights don't have.
+Measured with `npm run test:models` on Qwen2.5-0.5B-Instruct, three questions
+whose answers are unguessable:
+
+| dtype | Calls the tool | Answers from the result |
+|---|---|---|
+| **q4** (the default) | 3/3 | **3/3** |
+| `fp16` | 3/3 | 2/3 — misread `1096637` as `109,663,700` |
+| `q8` | 0/3 | 0/3 — even when primed, it invented a tool named `rain` |
+
+**q8 of a 0.5B is below the floor for tool calling.** No prompt fixes a model
+that cannot pick a name from a list of three. `auto` avoids it — it picks q4 —
+but if you pin `dtype` yourself, pin `q4` at this size.
+
+Run the matrix against your own model and tools before shipping:
+
+```bash
+npm run test:models -- --models your-org/your-model --dtypes q4,fp16
+```
 
 ## Every call format, one parser
 

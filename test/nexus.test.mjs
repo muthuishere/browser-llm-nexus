@@ -1,7 +1,7 @@
 // Tests run against the compiled dist/ (npm test builds first).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseToolCalls, stripThinking } from '../dist/toolcalls.js';
+import { parseToolCalls, salvageToolCall, stripThinking } from '../dist/toolcalls.js';
 import { MemoryIndex, chunkText } from '../dist/rag.js';
 import { similarity } from '../dist/embed.js';
 import { Metrics } from '../dist/metrics.js';
@@ -112,4 +112,65 @@ test('bundle: manifest round-trip', () => {
   const back = fromManifest(index, files);
   assert.equal(back[0].url, 'https://huggingface.co/x/resolve/main/config.json');
   assert.equal(back[0].data.byteLength, buf.byteLength);
+});
+
+// ── salvageToolCall: recovering a primed generation ─────────────────────────
+// Forcing hands the model an open `<tool_call>\n{"name": "` and lets it
+// continue. Small models routinely emit nearly-valid JSON, and the strict
+// parser threw all of it away — that was the FORCE-FAILED in the model matrix:
+// the right tool named, discarded over a missing brace.
+
+const KNOWN = ['get_weather', 'get_time', 'multiply'];
+
+test('salvage: a well-formed forced call', () => {
+  const c = salvageToolCall('<tool_call>\n{"name": "get_weather", "arguments": {"city": "Chennai"}}\n</tool_call>', KNOWN);
+  assert.deepEqual(c, { name: 'get_weather', arguments: { city: 'Chennai' } });
+});
+
+test('salvage: unterminated JSON (generation hit the token cap)', () => {
+  const c = salvageToolCall('<tool_call>\n{"name": "get_weather", "arguments": {"city": "Chennai"', KNOWN);
+  assert.deepEqual(c, { name: 'get_weather', arguments: { city: 'Chennai' } });
+});
+
+test('salvage: trailing prose after the call', () => {
+  const c = salvageToolCall('{"name": "multiply", "arguments": {"a": 4831, "b": 227}} — I will now compute that.', KNOWN);
+  assert.deepEqual(c, { name: 'multiply', arguments: { a: 4831, b: 227 } });
+});
+
+test('salvage: a name with no arguments at all still runs', () => {
+  const c = salvageToolCall('{"name": "get_time"', KNOWN);
+  assert.deepEqual(c, { name: 'get_time', arguments: {} });
+});
+
+test('salvage: the bare continuation of the primed prefix', () => {
+  // The model resumes AFTER `{"name": "` so its own output starts mid-string.
+  const c = salvageToolCall('get_weather", "arguments": {"city": "Chennai"}}', KNOWN);
+  assert.equal(c.name, 'get_weather');
+  assert.deepEqual(c.arguments, { city: 'Chennai' });
+});
+
+test('salvage: case-insensitive name match', () => {
+  assert.equal(salvageToolCall('{"name": "Get_Weather", "arguments": {}}', KNOWN).name, 'get_weather');
+});
+
+test('salvage: a unique partial name resolves', () => {
+  assert.equal(salvageToolCall('{"name": "weather", "arguments": {}}', KNOWN).name, 'get_weather');
+});
+
+test('salvage: an ambiguous partial is refused, not guessed', () => {
+  assert.equal(salvageToolCall('{"name": "get", "arguments": {}}', KNOWN), null);
+});
+
+test('salvage: an unknown tool is refused', () => {
+  assert.equal(salvageToolCall('{"name": "launch_missiles", "arguments": {}}', KNOWN), null);
+});
+
+test('salvage: prose with no call at all is refused', () => {
+  assert.equal(salvageToolCall('I think the weather is nice today.', KNOWN), null);
+});
+
+test('salvage: malformed arguments degrade to empty, keeping the call', () => {
+  const c = salvageToolCall('{"name": "get_weather", "arguments": {city: Chennai}}', KNOWN);
+  assert.equal(c.name, 'get_weather');
+  assert.deepEqual(c.arguments, {});
 });
