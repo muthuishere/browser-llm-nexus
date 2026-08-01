@@ -39,6 +39,14 @@ type ChatEvents = {
   round: [number];
   answer: [string];
   metric: [string, number];
+  /** The prompt as the model actually received it, per round. The single most
+   *  useful thing to see when a model won't call a tool — it shows whether the
+   *  schemas and tool results really made it into the template. */
+  prompt: [string, number];
+  /** Raw generation before parsing, per round, with what was parsed out of it.
+   *  "The model answered instead of calling" and "the model called but we
+   *  failed to parse it" look identical from the outside without this. */
+  raw: [string, ToolCall[], number];
 };
 
 /** Tool-calling chat over a converted browser model.
@@ -152,7 +160,7 @@ export class NexusChat extends Hooks<ChatEvents> {
     return [...this.tools.keys()];
   }
 
-  private async generate(opts: ChatOptions): Promise<string> {
+  private async generate(opts: ChatOptions, round = 0): Promise<string> {
     const tok = this.generator.tokenizer;
     // Once results are in, swap the call-phase instruction for the answer-phase
     // one. Only our own injected system message is touched — a system message
@@ -169,6 +177,7 @@ export class NexusChat extends Hooks<ChatEvents> {
       add_generation_prompt: true,
       enable_thinking: false,
     });
+    this.emit('prompt', prompt, round);
     let tokens = 0;
     const streamer = this.tjs.TextStreamer
       ? new this.tjs.TextStreamer(tok, {
@@ -201,8 +210,13 @@ export class NexusChat extends Hooks<ChatEvents> {
 
     for (let round = 0; round < this.maxRounds; round++) {
       this.emit('round', round);
-      const raw = await this.generate(opts);
-      const calls = parseToolCalls(raw).filter((c) => this.tools.has(c.name));
+      const raw = await this.generate(opts, round);
+      const parsed = parseToolCalls(raw);
+      const calls = parsed.filter((c) => this.tools.has(c.name));
+      // Emit what was parsed, not just what survived the name filter — a call
+      // to a tool that isn't registered is a different problem from no call at
+      // all, and both end the loop the same silent way.
+      this.emit('raw', raw, parsed, round);
       if (!calls.length) {
         const answer = stripThinking(raw);
         this.messages.push({ role: 'assistant', content: answer });

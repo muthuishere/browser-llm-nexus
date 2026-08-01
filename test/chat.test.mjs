@@ -384,3 +384,70 @@ test('a mistral-templated model round-trips through the loop', async () => {
   assert.match(llm.generated[0].prompt, /\[AVAILABLE_TOOLS\][\s\S]*get_weather/);
   assert.match(llm.generated[1].prompt, /\[TOOL_RESULTS\][\s\S]*31C/);
 });
+
+// ── Observability: why did the loop do that? ────────────────────────────────
+
+test('prompt and raw hooks expose every round', async () => {
+  const { chat } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'],
+  });
+  weather(chat);
+  const prompts = [];
+  const raws = [];
+  chat.on('prompt', (p, round) => prompts.push({ round, hasTools: /get_weather/.test(p) }));
+  chat.on('raw', (text, calls, round) => raws.push({ round, calls: calls.length, text }));
+
+  await chat.chat('weather?');
+
+  assert.deepEqual(prompts.map((p) => p.round), [0, 1]);
+  assert.equal(prompts[0].hasTools, true, 'the schema really is in the prompt');
+  assert.deepEqual(raws.map((r) => r.round), [0, 1]);
+  assert.equal(raws[0].calls, 1, 'round 0 parsed a call');
+  assert.equal(raws[1].calls, 0, 'round 1 was the answer');
+  assert.match(raws[0].text, /<tool_call>/, 'raw is pre-parse text');
+});
+
+// This is the failure seen on the live demo: tools registered, one generation,
+// zero tool calls, and a degenerate repetition returned as the answer. Without
+// the raw hook it is indistinguishable from a parser bug.
+test('a model that answers instead of calling is visible, not silent', async () => {
+  const degenerate = 'The weather in Chennai is described as follows: '.repeat(6);
+  const { chat, llm } = await chatWith({ script: [degenerate] });
+  weather(chat);
+  const seen = [];
+  chat.on('raw', (text, calls, round) => seen.push({ round, calls: calls.length, text }));
+
+  const answer = await chat.chat("What's the weather in Chennai?");
+
+  assert.equal(llm.rounds, 1, 'one generation, exactly what the metrics showed');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].calls, 0, 'nothing parsed — the model never called');
+  assert.equal(chat.metrics.counters.get('tool_calls'), undefined);
+  assert.equal(answer, degenerate.trim(), 'the raw text became the answer');
+});
+
+test('a call to an unregistered tool is distinguishable from no call', async () => {
+  const { chat } = await chatWith({ script: [dialect.qwen('get_stock', { ticker: 'X' })] });
+  weather(chat);
+  let parsedCount = null;
+  chat.on('raw', (_t, calls) => { parsedCount = calls.length; });
+
+  await chat.chat('stock?');
+
+  assert.equal(parsedCount, 1, 'the parser DID find a call — it just was not registered');
+  assert.equal(chat.metrics.counters.get('tool_calls'), undefined, 'and it was not dispatched');
+});
+
+test('the prompt hook shows tool results arriving in round 2', async () => {
+  const { chat } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'],
+  });
+  weather(chat);
+  const prompts = [];
+  chat.on('prompt', (p) => prompts.push(p));
+
+  await chat.chat('weather?');
+
+  assert.doesNotMatch(prompts[0], /tool_response/, 'round 1 has no results yet');
+  assert.match(prompts[1], /<tool_response>[\s\S]*31C, humid/, 'round 2 carries the result');
+});

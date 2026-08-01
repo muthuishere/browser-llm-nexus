@@ -275,3 +275,63 @@ test('clearing resets the session so a reload is required', async () => {
   assert.match(p.$('bDevice').textContent, /device —/);
   assert.match(p.$('log').textContent, /cache cleared/);
 });
+
+// ── Diagnostics panel ──────────────────────────────────────────────────────
+
+test('each round is shown with prompt, raw output and parse verdict', async () => {
+  const cc = mockChatClass({ script: ['It is 31C.'] });
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  const chat = cc.state.instances[0];
+  chat.emit('prompt', '<|im_start|>system\n<tools>\n{"name":"get_weather"}\n</tools>', 0);
+  chat.emit('raw', '<tool_call>{"name":"get_weather"}</tool_call>', [{ name: 'get_weather', arguments: {} }], 0);
+
+  const d = p.$('diag').textContent;
+  assert.match(d, /round 1/);
+  assert.match(d, /1 tool call parsed/);
+  assert.match(d, /tool schemas: yes/);
+});
+
+// The live-demo failure: tools registered, one round, zero calls, a degenerate
+// repetition returned as the answer. The panel has to name that out loud.
+test('a model answering instead of calling is called out explicitly', async () => {
+  const cc = mockChatClass();
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  const chat = cc.state.instances[0];
+  chat.emit('prompt', 'system <tools>{"name":"get_weather"}</tools> user', 0);
+  chat.emit('raw', 'The weather in Chennai is described as follows: '.repeat(5), [], 0);
+
+  const d = p.$('diag').textContent;
+  assert.match(d, /no tool call — the model answered instead/);
+  assert.match(d, /described as follows/, 'the raw output is visible');
+});
+
+test('a prompt missing tool schemas is flagged', async () => {
+  const cc = mockChatClass();
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  cc.state.instances[0].emit('prompt', 'just a user turn, no schemas here', 0);
+
+  assert.match(p.$('diag').textContent, /tool schemas: NO/);
+});
+
+test('the panel resets between questions', async () => {
+  const cc = mockChatClass({ script: ['a'] });
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  cc.state.instances[0].emit('raw', 'first round text', [], 0);
+  assert.match(p.$('diag').textContent, /first round text/);
+
+  p.click('ask');
+  await p.settle();
+  assert.doesNotMatch(p.$('diag').textContent, /first round text/);
+});

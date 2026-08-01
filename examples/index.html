@@ -77,6 +77,13 @@
   }
   pre#snippet .k { color: var(--accent-soft); }
   pre#snippet .c { color: var(--dim); }
+  .diag { font: 11.5px/1.55 var(--mono); max-height: 340px; overflow: auto; }
+  .diag .rnd { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #16171a; }
+  .diag .hd { color: var(--accent-soft); font-weight: 600; margin-bottom: 6px; }
+  .diag .lbl { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; margin-top: 6px; }
+  .diag pre { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow: auto; }
+  .diag .ok { color: var(--ok); }
+  .diag .bad { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -197,6 +204,17 @@
       The answers are deliberately unguessable — the model can only get them right by calling a tool.
       Watch the tool log on the right.
     </p>
+
+    <details id="diagWrap" open>
+      <summary style="cursor:pointer;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em">
+        What actually happened
+      </summary>
+      <p class="hint" style="margin:8px 0">
+        Every round: the prompt the model received, its raw output before parsing, and how many tool
+        calls came out. If a small model answers instead of calling, this is where you see it.
+      </p>
+      <div id="diag" class="diag"><span class="placeholder">Ask something to see the rounds.</span></div>
+    </details>
   </fieldset>
 
   <fieldset>
@@ -356,6 +374,20 @@ $('load').addEventListener('click', async () => {
 
     await applyTools();   // whatever the editor currently defines
 
+    // ── Diagnostics: the prompt in, the raw text out, what parsed. ──────────
+    // Without this, "the model answered instead of calling a tool" and "we
+    // failed to parse a call it did make" look identical from the outside.
+    chat.on('prompt', (prompt, round) => {
+      diagRound(round).prompt = prompt;
+      renderDiag();
+    });
+    chat.on('raw', (text, calls, round) => {
+      const r = diagRound(round);
+      r.raw = text;
+      r.calls = calls;
+      renderDiag();
+    });
+
     chat.on('toolCall', (call, result) => {
       if ($('calls').firstElementChild?.style.color) $('calls').innerHTML = '';
       const li = document.createElement('li');
@@ -381,6 +413,35 @@ $('load').addEventListener('click', async () => {
   }
 });
 
+// ── Diagnostics panel ───────────────────────────────────────────────────────
+let rounds = [];
+const diagRound = (n) => (rounds[n] ??= { n, prompt: '', raw: '', calls: null });
+const escHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function renderDiag() {
+  if (!rounds.length) { $('diag').innerHTML = '<span class="placeholder">Ask something to see the rounds.</span>'; return; }
+  $('diag').innerHTML = rounds
+    .filter(Boolean)
+    .map((r) => {
+      const n = r.calls == null ? null : r.calls.length;
+      const verdict =
+        n == null ? '<span class="lbl">generating…</span>'
+        : n > 0 ? `<span class="ok">${n} tool call${n === 1 ? '' : 's'} parsed</span>`
+        : '<span class="bad">no tool call — the model answered instead</span>';
+      const toolsInPrompt = /<tools>|AVAILABLE_TOOLS|"name":/.test(r.prompt);
+      const resultsInPrompt = /tool_response|TOOL_RESULTS/.test(r.prompt);
+      return `<div class="rnd">
+        <div class="hd">round ${r.n + 1} — ${verdict}</div>
+        <div class="lbl">prompt (${r.prompt.length} chars) · tool schemas: ${toolsInPrompt ? 'yes' : '<span class="bad">NO</span>'} · tool results: ${resultsInPrompt ? 'yes' : 'none yet'}</div>
+        <pre>${escHtml(r.prompt.slice(-700))}</pre>
+        <div class="lbl">raw model output (before parsing)</div>
+        <pre>${escHtml(r.raw).slice(0, 1200) || '…'}</pre>
+        ${n ? `<div class="lbl">parsed</div><pre>${escHtml(JSON.stringify(r.calls, null, 1))}</pre>` : ''}
+      </div>`;
+    })
+    .join('');
+}
+
 // ── Ask ──────────────────────────────────────────────────────────────────────
 function bubble(who, cls) {
   if ($('chat').querySelector('.placeholder')) $('chat').innerHTML = '';
@@ -394,6 +455,8 @@ function bubble(who, cls) {
 
 async function ask(text) {
   if (!chat || !text.trim()) return;
+  rounds = [];
+  renderDiag();
   $('ask').disabled = $('q').disabled = true;
   bubble('you', 'u').textContent = text;
   const out = bubble('assistant', 'a');
