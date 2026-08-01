@@ -183,7 +183,9 @@ it.
 
 - **[hf2browser](https://github.com/muthuishere/hf2browser)** — converts any Hugging Face LLM
   to the browser layout, then chats with it through this library (its CPU verifier runs the
-  tool loop here, so what it certifies is what a page does).
+  tool loop here, so what it certifies is what a page does). It also generates a **single
+  self-contained `chat.html`** per model — this library from a CDN, the weights from a
+  `model.zip` — so a converted model ships as two static files you can host anywhere.
 - **[offline-llm-knowledge-system](https://github.com/muthuishere/offline-llm-knowledge-system)** —
   packages documents + a model into a portable zip you open offline; this library is its
   `transformersjs` engine, the one that needs no GPU.
