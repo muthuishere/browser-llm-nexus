@@ -1,5 +1,11 @@
 # browser-llm-nexus
 
+[![npm](https://img.shields.io/npm/v/browser-llm-nexus?color=cb3837&logo=npm)](https://www.npmjs.com/package/browser-llm-nexus)
+[![install size](https://img.shields.io/badge/deps-0-brightgreen)](https://www.npmjs.com/package/browser-llm-nexus)
+[![types](https://img.shields.io/badge/types-included-blue?logo=typescript&logoColor=white)](https://www.npmjs.com/package/browser-llm-nexus)
+[![provenance](https://img.shields.io/badge/npm-signed%20provenance-6f42c1?logo=github)](https://www.npmjs.com/package/browser-llm-nexus#provenance)
+[![license](https://img.shields.io/npm/l/browser-llm-nexus)](./LICENSE)
+
 **Run LLMs in the browser — GPU or CPU, same API.** Tool calling, embeddings, RAG,
 offline bundles, and metrics in one small hooks-style TypeScript library over
 [Transformers.js](https://github.com/huggingface/transformers.js).
@@ -7,6 +13,9 @@ offline bundles, and metrics in one small hooks-style TypeScript library over
 ```bash
 npm install browser-llm-nexus
 ```
+
+📦 **[browser-llm-nexus on npm](https://www.npmjs.com/package/browser-llm-nexus)** — zero runtime
+dependencies, TypeScript types included, published from CI with signed provenance.
 
 Standalone by design: no server of ours, no bundled weights, no assumed layout.
 Transformers.js is an *injectable* peer dependency, and **where a model comes from is
@@ -169,6 +178,15 @@ own static host, or a build step of your own. If you need to convert a PyTorch m
 that layout yourself, [hf2browser](https://github.com/muthuishere/hf2browser) is one tool
 that does it (and serves model archives in the format above), but nothing here depends on
 it.
+
+## Used by
+
+- **[hf2browser](https://github.com/muthuishere/hf2browser)** — converts any Hugging Face LLM
+  to the browser layout, then chats with it through this library (its CPU verifier runs the
+  tool loop here, so what it certifies is what a page does).
+- **[offline-llm-knowledge-system](https://github.com/muthuishere/offline-llm-knowledge-system)** —
+  packages documents + a model into a portable zip you open offline; this library is its
+  `transformersjs` engine, the one that needs no GPU.
 
 ## Develop
 
