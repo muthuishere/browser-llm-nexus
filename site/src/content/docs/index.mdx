@@ -1,0 +1,85 @@
+---
+title: browser-llm-nexus
+description: Private LLM in any browser. GPU optional. Tool calling, embeddings, RAG and offline knowledge bundles over Transformers.js.
+template: splash
+hero:
+  tagline: Run an LLM inside the tab — WebGPU when the browser has it, CPU when it doesn't. Same API either way. No server, no bundled weights, nothing leaves the page.
+  actions:
+    - text: Quickstart
+      link: /browser-llm-nexus/quickstart/
+      icon: right-arrow
+    - text: GPU or CPU
+      link: /browser-llm-nexus/gpu-or-cpu/
+      icon: right-arrow
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/muthuishere/browser-llm-nexus
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Private LLM in any browser. GPU optional.
+
+Most "LLM in the browser" projects are a WebGPU demo. A demo excludes the locked-down
+corporate laptop with no GPU adapter — which is exactly the machine where *"the data
+must not leave this page"* actually matters.
+
+Here, **GPU is an accelerator, never a requirement.** Every loader picks WebGPU when the
+browser exposes a usable adapter and falls back to WASM/CPU otherwise, and your code does
+not change either way.
+
+```bash
+npm install browser-llm-nexus
+```
+
+```ts
+import { NexusChat } from 'browser-llm-nexus';
+
+const chat = await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+
+chat.tool('get_weather', 'Get current weather for a city',
+  { city: 'string' },
+  async ({ city }) => (await fetch(`/api/weather?c=${city}`)).json());
+
+chat.on('token', t => render(t));
+console.log(await chat.chat('What is the weather in Chennai?'));
+```
+
+<CardGrid>
+	<Card title="Runs anywhere" icon="laptop">
+		WebGPU → WASM/CPU with no code change. dtype follows the backend — fp16 first on
+		GPU, q4 first on CPU — among the variants your source actually has.
+		[How it works](/browser-llm-nexus/gpu-or-cpu/)
+	</Card>
+	<Card title="Calls your tools" icon="puzzle">
+		Register a function, get a grounded answer. The loop parses Qwen/Hermes, Mistral,
+		Llama and fenced-JSON call formats, runs your handler, and feeds the result back.
+		[Tool calling](/browser-llm-nexus/tool-calling/)
+	</Card>
+	<Card title="Ships offline in a zip" icon="seti:zip">
+		Export a model, a vector index, or a whole knowledge base to a portable archive.
+		Import it on an air-gapped machine — nothing is re-embedded, nothing is downloaded.
+		[Knowledge & bundles](/browser-llm-nexus/knowledge/)
+	</Card>
+</CardGrid>
+
+## Standalone by design
+
+No server of ours. No bundled weights. No assumed layout. Transformers.js is an
+*injectable* peer dependency, and **where a model comes from is always something you
+state** — never guessed.
+
+```ts
+await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });  // Hugging Face
+await NexusChat.load({ base: '/models/', id: 'Qwen/Qwen3-0.6B' }); // your own host
+await NexusChat.load({ archive: fileTheUserPicked });              // a portable zip
+```
+
+## The sister library
+
+**[toolnexus](https://github.com/muthuishere/toolnexus) gives any LLM tools.
+browser-llm-nexus gives you the LLM.** One runs on your server in six languages, one runs
+in the tab with no server at all — and both emit the same OpenAI function schema.
+[See how they fit together](/browser-llm-nexus/toolnexus/).

@@ -1,0 +1,82 @@
+---
+title: Quickstart
+description: Install browser-llm-nexus, load a model in the browser, and get a tool-grounded answer — in about twenty lines.
+---
+
+## Install
+
+```bash
+npm install browser-llm-nexus
+npm install @huggingface/transformers   # the engine — an injectable peer dependency
+```
+
+`@huggingface/transformers` and `fflate` are **optional** peer dependencies. If you don't
+install them, the library loads Transformers.js from a CDN at runtime and only pulls in
+`fflate` when you do zip work. Install them when you want a pinned, bundled, offline-safe
+build — which you usually do.
+
+## Load a model
+
+The source is always explicit. There is no default host and no `/models/` convention:
+
+```ts
+import { NexusChat } from 'browser-llm-nexus';
+
+const chat = await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+
+console.log(chat.device);   // 'webgpu' or 'wasm' — whichever this browser can do
+console.log(chat.dtype);    // 'fp16' | 'q4' | 'q8' | 'fp32'
+```
+
+Loading weights takes a while the first time. Show progress:
+
+```ts
+const chat = await NexusChat.load(
+  { hub: 'onnx-community/Qwen3-0.6B-ONNX' },
+  { onProgress: p => console.log(p.status, p.file, p.progress) },
+);
+```
+
+## Stream tokens
+
+Events are hooks, not callbacks — subscribe as many as you like:
+
+```ts
+chat.on('token', t => output.append(t));
+const answer = await chat.chat('Explain WebGPU in two sentences.');
+```
+
+## Add a tool
+
+A tool is a name, a description, a parameter shape, and a handler. Parameters take a
+shorthand — `{ city: 'string' }` expands to a full JSON Schema property:
+
+```ts
+chat.tool(
+  'get_weather',
+  'Get current weather for a city',
+  { city: 'string' },
+  async ({ city }) => (await fetch(`/api/weather?c=${city}`)).json(),
+);
+
+chat.on('toolCall', (call, result) => console.log(call.name, result));
+
+const answer = await chat.chat('What is the weather in Chennai?');
+```
+
+The loop is automatic: the model emits a call, the library parses it, runs your handler,
+feeds the result back, and asks again — up to `chat.maxRounds` (default `4`) — until you
+get a grounded answer. See [Tool calling](/browser-llm-nexus/tool-calling/).
+
+## Check what it cost
+
+```ts
+console.log(chat.metrics.summary());
+// { load_ms_avg, tokens_per_second, tool_calls_ok, … }
+```
+
+## Next
+
+- [GPU or CPU — same API](/browser-llm-nexus/gpu-or-cpu/) — how the backend is chosen, and how to force one
+- [Where models come from](/browser-llm-nexus/model-sources/) — hub, your own host, or a portable archive
+- [Knowledge & offline bundles](/browser-llm-nexus/knowledge/) — documents in, grounded answers out, shipped in a zip

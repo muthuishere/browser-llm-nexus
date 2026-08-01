@@ -1,0 +1,41 @@
+---
+title: Together with toolnexus
+description: toolnexus gives any LLM tools. browser-llm-nexus gives you the LLM. Two independent libraries that emit the same tool schema.
+---
+
+**[toolnexus](https://github.com/muthuishere/toolnexus) gives any LLM tools.
+browser-llm-nexus gives you the LLM.**
+
+Siblings, not layers — neither depends on the other. What they share is the tool schema.
+
+|  | toolnexus | browser-llm-nexus |
+|---|---|---|
+| Runs | on your server | in the browser tab |
+| Brings | tools (MCP, skills, HTTP, A2A) | the model (WebGPU / WASM) |
+| Needs a model endpoint | yes | no — the weights are local |
+| Data leaves the machine | to your model provider | never |
+
+## The same tool, both sides
+
+The authoring APIs differ, but both compile to the identical OpenAI function envelope —
+so a tool you designed for one is the same tool in the other.
+
+```ts
+// toolnexus — server side
+defineTool({
+  name: 'get_weather',
+  description: 'Get current weather for a city',
+  inputSchema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  run: ({ city }) => fetchWeather(city),
+})
+
+// browser-llm-nexus — in the tab
+chat.tool('get_weather', 'Get current weather for a city',
+  { city: 'string' },
+  ({ city }) => fetchWeather(city));
+```
+
+Reach for browser-llm-nexus when the data must not leave the machine; reach for toolnexus
+when a model endpoint is fine and the hard part is the tools.
+
+[toolnexus docs →](https://muthuishere.github.io/toolnexus/)

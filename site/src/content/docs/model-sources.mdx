@@ -1,0 +1,89 @@
+---
+title: Where models come from
+description: Three explicit sources — the Hugging Face Hub, a folder you serve, or a portable archive. There is no default host and no assumed path convention.
+---
+
+Every loader takes a **`ModelSource`**, and there are exactly three shapes. Nothing here
+guesses a host, and there is no `/models/` convention baked in — if you don't say where the
+weights are, the library doesn't invent an answer.
+
+```ts
+type ModelSource =
+  | { hub: string }                          // the Hugging Face Hub, by repo id
+  | { base: string; id: string }             // a folder you serve over HTTP
+  | { archive: ArchiveSource; zip?: ZipLike } // a portable zip
+```
+
+The same three work for `NexusChat.load`, `NexusEmbedder.load`, and both slots of
+`NexusKnowledge.create`.
+
+## The Hub
+
+```ts
+await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+```
+
+Simplest for a demo or a prototype. The browser fetches weights from Hugging Face, so it
+needs internet and your users' traffic goes to a third party.
+
+## Your own host
+
+```ts
+await NexusChat.load({ base: '/models/', id: 'Qwen/Qwen3-0.6B' });
+await NexusChat.load({ base: 'https://cdn.example.com/m/', id: 'Qwen/Qwen3-0.6B' });
+```
+
+Files are expected at `${base}${id}/config.json`, `${base}${id}/onnx/model_q4.onnx`, and so
+on — the standard Transformers.js layout. A relative `base` resolves against the page. This
+is the production shape: your CDN, your cache headers, your uptime, no third-party
+dependency at runtime.
+
+## A portable archive
+
+```ts
+await NexusChat.load({ archive: fileTheUserPicked });          // File from <input>
+await NexusChat.load({ archive: 'https://host/model.zip' });   // URL
+await NexusChat.load({ archive: bytes });                       // Blob / Uint8Array
+```
+
+The archive is restored into the browser cache first, then the model loads out of that
+cache — so **loading needs no further network at all**. This is the air-gap path, and the
+one that makes a knowledge base shippable on a USB stick. See
+[offline bundles](/browser-llm-nexus/knowledge/).
+
+Make one with `exportModel`:
+
+```ts
+import { exportModel } from 'browser-llm-nexus/model';
+
+const zip = await exportModel('Qwen/Qwen3-0.6B', {
+  modelsUrl: 'https://cdn.example.com/m/',
+  dtypes: ['q4'],        // ship one variant — keeps it small enough to hand someone
+});
+```
+
+## Anything serving the standard layout works
+
+Hugging Face, your static host, a build step of your own — if it serves the Transformers.js
+file layout, it's a valid `base`. Converting a PyTorch model into that layout is a separate
+job; [hf2browser](https://github.com/muthuishere/hf2browser) is one tool that does it (and
+serves archives in the format above), but **nothing here depends on it**.
+
+## Injecting the runtime
+
+Transformers.js itself is an injectable peer dependency. Pass your own build — a pinned
+version, a lite build, a patched fork — and the library uses it instead of loading one from
+a CDN:
+
+```ts
+import * as transformers from '@huggingface/transformers';
+
+const chat = await NexusChat.load(source, { transformers });
+```
+
+`fflate` is injectable the same way via `{ zip }` on any archive call.
+
+## Related
+
+- [GPU or CPU](/browser-llm-nexus/gpu-or-cpu/) — which dtype gets picked out of what your source serves
+- [Knowledge & offline bundles](/browser-llm-nexus/knowledge/) — archives, composed

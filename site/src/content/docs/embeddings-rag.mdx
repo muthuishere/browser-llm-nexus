@@ -1,0 +1,84 @@
+---
+title: Embeddings & RAG
+description: The pieces under NexusKnowledge, used directly — an embedding model, a dependency-free vector index, chunking, and cosine top-k search, all in the browser.
+---
+
+[`NexusKnowledge`](/browser-llm-nexus/knowledge/) is the batteries-included path. When you
+want your own retrieval logic — a different chunker, a hybrid ranker, your own store — the
+pieces are exported separately.
+
+## Embed
+
+```ts
+import { NexusEmbedder } from 'browser-llm-nexus';
+
+const embedder = await NexusEmbedder.load({ hub: 'Xenova/bge-small-en-v1.5' });
+
+const one  = await embedder.embed('a single sentence');        // Float32Array
+const many = await embedder.embedBatch(['first', 'second']);   // Float32Array[]
+```
+
+Vectors come back **mean-pooled and normalized**, so cosine similarity is a dot product.
+The embedder defaults to `dtype: 'q8'` — a good size/quality point for embedding models —
+and does the same [WebGPU → WASM detection](/browser-llm-nexus/gpu-or-cpu/) as everything
+else. Call `embedder.dispose()` when you're done to release the backend.
+
+## Index and search
+
+`MemoryIndex` is an in-memory cosine index, deliberately dependency-free. For thousands of
+chunks it's plenty; swap in a real store when you outgrow it.
+
+```ts
+import { MemoryIndex, chunkText } from 'browser-llm-nexus';
+
+const index = new MemoryIndex();
+const chunks = chunkText(documentText);
+const vectors = await embedder.embedBatch(chunks);
+chunks.forEach((text, i) => index.add({ id: String(i), text, vector: vectors[i] }));
+
+const hits = index.search(await embedder.embed(question), 5);   // [{ chunk, score }]
+```
+
+`add` / `addAll` insert, `all()` returns everything in insertion order, `size` counts. Each
+chunk carries an optional `meta` object that survives search, serialization and export —
+use it for source ids, page numbers, permissions.
+
+## Assemble context
+
+`contextFor` is `search` plus the stuffing step, with a character budget so you don't blow
+past the model's window:
+
+```ts
+const context = index.contextFor(await embedder.embed(question), 5, 4000);
+const answer = await chat.chat(`Context:\n${context}\n\nQuestion: ${question}`);
+```
+
+It walks hits best-first and stops before exceeding `maxChars` (default `4000`).
+
+## Persist
+
+Round-trip through plain JSON, or through a portable zip:
+
+```ts
+localStorage.setItem('idx', JSON.stringify(index.serialize()));
+const restored = MemoryIndex.restore(JSON.parse(localStorage.getItem('idx')));
+
+import { exportIndex } from 'browser-llm-nexus/rag';
+const zip = await exportIndex(index);
+```
+
+`serialize()` writes vectors as number arrays; `restore` turns them back into
+`Float32Array`s. Nothing is re-embedded either way — see
+[offline bundles](/browser-llm-nexus/knowledge/).
+
+## Similarity on its own
+
+```ts
+import { similarity } from 'browser-llm-nexus/embed';
+similarity(vectorA, vectorB);   // cosine, for normalized vectors
+```
+
+## Related
+
+- [Knowledge & offline bundles](/browser-llm-nexus/knowledge/) — these pieces, composed
+- [Tool calling](/browser-llm-nexus/tool-calling/) — grounding in functions instead of documents

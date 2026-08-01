@@ -1,0 +1,74 @@
+---
+title: GPU or CPU — same API
+description: Every loader picks WebGPU when the browser has it and WASM/CPU when it doesn't. Your code does not change. GPU is an accelerator here, never a requirement.
+---
+
+Most browser-LLM projects are a WebGPU showcase: no adapter, no product. That rules out
+the managed corporate laptop with GPU acceleration disabled by policy — which is precisely
+the machine where "this data must not leave the page" is a hard requirement rather than a
+nice idea.
+
+**GPU is an accelerator here, never a requirement.** The same page works on a workstation
+and on a locked-down laptop, with the same code.
+
+## How the backend is chosen
+
+`detectDevice` asks the browser for a GPU adapter and falls back to WASM if there isn't
+one — or if requesting the adapter throws:
+
+```ts
+const chat = await NexusChat.load(source);                     // auto: webgpu → wasm
+const chat = await NexusChat.load(source, { device: 'wasm' }); // force CPU
+const chat = await NexusChat.load(source, { device: 'webgpu' }); // force GPU
+```
+
+After loading, the resolved backend is readable:
+
+```ts
+console.log(chat.device);   // 'webgpu' | 'wasm'
+```
+
+`NexusEmbedder.load` takes the same option and does the same detection, so an embedder and
+a chat model in one page can be forced onto different backends if you want to.
+
+## dtype follows the backend
+
+Quantization that is fast on a GPU is not the quantization that is fast on a CPU, so the
+preferred order differs:
+
+| Backend | Order tried |
+|---|---|
+| `webgpu` | `fp16` → `q4` → `q8` → `fp32` |
+| `wasm` / CPU | `q4` → `q8` → `fp16` → `fp32` |
+
+The library **probes** which variants your source actually serves — a `HEAD` request per
+candidate against `<base>/<model>/onnx/<file>` — and takes the first that exists. It never
+assumes a variant is there.
+
+| dtype | File probed |
+|---|---|
+| `q4` | `model_q4.onnx` |
+| `q8` | `model_quantized.onnx` |
+| `fp16` | `model_fp16.onnx` |
+| `fp32` | `model.onnx` |
+
+Skip probing when you already know what you're serving — one fewer round trip per
+candidate:
+
+```ts
+await NexusChat.load(source, { dtype: 'q4' });
+```
+
+Probing needs a base URL to probe against. If you hit
+`cannot probe dtypes without a base URL`, pass an explicit `dtype`.
+
+## What this buys you
+
+- One build, one code path, every machine — no "unsupported browser" branch.
+- A CPU fallback that is slow but *correct*, instead of a blank page.
+- Freedom to ship a small quantized model as the floor and let GPU machines pick fp16.
+
+## Related
+
+- [Where models come from](/browser-llm-nexus/model-sources/) — what "your source actually serves" means
+- [Quickstart](/browser-llm-nexus/quickstart/)

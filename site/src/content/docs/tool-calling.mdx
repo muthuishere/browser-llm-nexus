@@ -1,0 +1,107 @@
+---
+title: Tool calling
+description: Give a small in-browser model real functions to call. Register a handler, get a grounded answer — the parse, dispatch and feed-back loop is automatic across Qwen/Hermes, Mistral, Llama and fenced-JSON call formats.
+---
+
+Tool calling is what turns a 0.6B model in a tab from a toy into something useful. The
+model doesn't need to *know* the answer — it needs to know which of your functions to
+call. That works at sizes that fit in a browser.
+
+## Register a tool
+
+```ts
+chat.tool(
+  'get_weather',                          // name
+  'Get current weather for a city',       // description — the model reads this
+  { city: 'string' },                     // shorthand JSON schema
+  async ({ city }) => (await fetch(`/api/weather?c=${city}`)).json(),
+);
+```
+
+Parameters take a shorthand: `{ city: 'string' }` expands to
+`{ city: { type: 'string' } }`. Pass a full property object when you need more:
+
+```ts
+chat.tool('search', 'Search the catalog',
+  { q: 'string', limit: { type: 'number', description: 'max results' } },
+  handler,
+  { required: ['q'] },   // default: every property is required
+);
+```
+
+`tool()` returns `this`, so registrations chain. The emitted schema is the standard
+OpenAI function envelope — `{ type: 'function', function: { name, description, parameters } }`
+— readable at `chat.toolSchemas`.
+
+## The loop
+
+`chat.chat(prompt)` runs the whole round trip:
+
+1. Render your tools into the model's chat template.
+2. Generate. Strip `<think>…</think>` if it's a reasoning model.
+3. Parse any tool calls out of the raw output.
+4. Run your handlers.
+5. Feed the results back as tool messages and generate again.
+6. Repeat up to `chat.maxRounds` (default `4`), then return the grounded answer.
+
+Multi-round and multi-tool: a model can call two tools in one turn, or call one, see the
+result, and call another. Watch it happen:
+
+```ts
+chat.on('token', t => render(t));
+chat.on('toolCall', (call, result) => console.log(call.name, call.arguments, result));
+```
+
+A default system prompt pushes against hallucination — *"When a question relates to a
+tool, you MUST call the tool instead of guessing or inventing data. Answer from tool
+results."* Override it with `chat.systemPrompt = '…'`.
+
+## Every call format, one parser
+
+Small open models each invented their own way to say "call this function." The parser
+handles all of them, in order, and stops at the first that yields calls:
+
+| Family | What it emits |
+|---|---|
+| Qwen, Hermes | `<tool_call>{"name":…,"arguments":…}</tool_call>` |
+| Mistral | `[TOOL_CALLS] [{"name":…,"arguments":…}]` |
+| Llama, others | bare JSON, or JSON in a ` ```json ` fence |
+| OpenAI-shaped | nested `{ function: { name, arguments } }` |
+
+Argument objects that arrive as a *string* of JSON are decoded too — a very common
+failure mode with quantized models. You can use the parser on its own:
+
+```ts
+import { parseToolCalls, stripThinking } from 'browser-llm-nexus/toolcalls';
+```
+
+## Reasoning models
+
+Models with a thinking mode are handled: generation passes `enable_thinking: false` where
+the template supports it, and any `<think>…</think>` block that still appears is stripped
+before parsing. You get the answer, not the monologue.
+
+## Tools written at runtime
+
+`evalTools` takes user-written JavaScript and registers whatever it defines — the
+decorator pattern as a function. Useful for letting an app's own users extend the agent:
+
+```ts
+const names = await chat.evalTools(`
+  tool('get_watch_count', 'How many watches the user owns', {},
+    async () => (await db.watches.count()));
+`);
+```
+
+It **replaces** the current tool set and returns the registered names.
+
+:::caution
+`evalTools` runs the string with `new Function`. That is code execution with the
+privileges of your page. Only feed it code the current user authored for themselves —
+never a string that arrived from another user or a server you don't control.
+:::
+
+## Related
+
+- [Together with toolnexus](/browser-llm-nexus/toolnexus/) — the same schema, server-side, in six languages
+- [Knowledge & offline bundles](/browser-llm-nexus/knowledge/) — grounding in documents instead of functions

@@ -1,0 +1,106 @@
+---
+title: Knowledge & offline bundles
+description: Documents in, grounded answers out — then export the whole thing, weights and vectors included, as one zip that imports on an air-gapped machine and re-embeds nothing.
+---
+
+`NexusKnowledge` composes a chat model, an embedding model and a vector index into one
+object: you add documents, you ask questions, you get answers grounded in those documents.
+Chunking, embedding, indexing, retrieval and context assembly are handled.
+
+```ts
+import { NexusKnowledge } from 'browser-llm-nexus';
+
+const kb = await NexusKnowledge.create({
+  chat: { hub: 'onnx-community/Qwen3-0.6B-ONNX' },
+  embedder: { hub: 'Xenova/bge-small-en-v1.5' },   // also the default
+});
+
+await kb.addDocument({ id: 'handbook', title: 'Handbook', text: handbookText });
+
+kb.on('token', t => render(t));
+const answer = await kb.ask('What is the refund policy?');
+```
+
+`chat` and `embedder` each accept either a [model source](/browser-llm-nexus/model-sources/)
+or an already-loaded `NexusChat` / `NexusEmbedder`, so two knowledge bases can share one
+loaded model instead of paying for it twice. `chunkSize`, `chunkOverlap` and `topK` are
+options on `create`.
+
+## The part nobody else has: ship it offline
+
+A knowledge archive is the three artifacts composed into one zip:
+
+```
+manifest.json          { kind: 'knowledge', models, docs, contains }
+rag/                   the vector store
+models/chat/model.zip  optional — a full model archive, nested
+models/embedder/model.zip
+```
+
+Export it:
+
+```ts
+const zip = await kb.exportZip({ includeModels: true });   // rag + both models
+download(zip, 'handbook-kb.zip');
+```
+
+Import it on a machine with no internet:
+
+```ts
+const kb2 = await NexusKnowledge.importZip(fileFromInput);        // a File from <input>
+const kb3 = await NexusKnowledge.importZip('/bundles/handbook-kb.zip');
+```
+
+The weights are restored into the browser cache and the vectors are restored as vectors —
+**nothing is downloaded and nothing is re-embedded.** Embedding a corpus is the slow,
+expensive step; doing it once at build time and shipping the result is the whole point.
+
+### Vectors without the text
+
+When the source documents themselves shouldn't travel — customer data, licensed content —
+ship the index and leave the text behind:
+
+```ts
+const zip = await kb.exportZip({ includeText: false });
+```
+
+Retrieval still works. The chunks that come back carry vectors and metadata, not the
+original prose.
+
+### Look before you load
+
+`inspect` reads the manifest without loading a single model — use it to show a user what a
+2 GB file contains before they commit to it:
+
+```ts
+const manifest = await NexusKnowledge.inspect('/bundles/handbook-kb.zip');
+console.log(manifest.models, manifest.docs.length, manifest.contains);
+```
+
+## Three archive kinds, each standalone
+
+You don't have to bundle everything. Each artifact exports and imports on its own:
+
+| Kind | Export | Contains |
+|---|---|---|
+| Model | `exportModel(id, opts)` | one model's weights, dtype-filterable |
+| Index | `exportIndex(index, opts)` | vectors + chunk text |
+| Knowledge | `kb.exportZip(opts)` | manifest + index + optionally both models |
+
+`exportModel` takes a `dtypes` filter — shipping only `q4` keeps an archive small enough to
+actually hand someone.
+
+`fflate` does the zipping. It's an optional peer dependency: install it, pass your own with
+`{ zip }`, or let it load from a CDN.
+
+## Where this is worth it
+
+- Air-gapped or field deployments — a USB stick instead of a VPN.
+- Regulated data that must not reach a server, including *your* server.
+- A demo that works on conference wifi, because it doesn't use the network.
+- Deterministic builds — the exact weights and the exact vectors, versioned as one file.
+
+## Related
+
+- [Embeddings & RAG](/browser-llm-nexus/embeddings-rag/) — the pieces underneath, used directly
+- [Where models come from](/browser-llm-nexus/model-sources/) — `{ archive }` as a load source
