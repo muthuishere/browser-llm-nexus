@@ -44,10 +44,23 @@ export const DTYPE_FILES: Record<string, string> = {
 };
 export const DTYPE_ORDER = ['q4', 'q8', 'fp16', 'fp32'] as const;
 
-/** dtype that actually works well on a given backend. WebGPU prefers fp16;
- *  WASM/CPU prefers the quantized variants. */
+/** dtype to prefer on a given backend.
+ *
+ *  q4 first on BOTH backends. WebGPU used to prefer fp16 — the conventional
+ *  choice, since a GPU has the memory bandwidth for it — and that made small
+ *  models unreliable at the one job they are good for. Measured on
+ *  Qwen2.5-0.5B-Instruct over three tool-calling questions
+ *  (`npm run test:models`):
+ *
+ *    q4    3/3 called and answered from the result
+ *    fp16  3/3 called, 2/3 correct — it read 1096637 back as "109,663,700"
+ *    q8    0/3 — narrated ("I would need to use a specific tool") and never called
+ *
+ *  A faster answer that silently corrupts a tool result is worse than a slower
+ *  correct one, so correctness picks the default and fp16 stays one explicit
+ *  option away. Larger models may well prefer fp16; state it when you know. */
 export function preferredDtypeOrder(device: string): readonly string[] {
-  return device === 'webgpu' ? (['fp16', 'q4', 'q8', 'fp32'] as const) : DTYPE_ORDER;
+  return device === 'webgpu' ? (['q4', 'fp16', 'q8', 'fp32'] as const) : DTYPE_ORDER;
 }
 
 /** Builds the location of one of a model's dtype files. Sources differ in

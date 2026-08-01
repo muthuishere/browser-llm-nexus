@@ -70,9 +70,22 @@ test('detectDevice picks webgpu when an adapter exists', async () => {
   }
 });
 
-test('preferredDtypeOrder prefers fp16 on gpu, q4 on cpu', () => {
-  assert.equal(preferredDtypeOrder('webgpu')[0], 'fp16');
+// q4 first on BOTH backends. WebGPU preferring fp16 is the conventional choice
+// and it made small models unreliable: measured on Qwen2.5-0.5B, fp16 called
+// the tool but read 1096637 back as "109,663,700", while q4 was 3/3 correct.
+// Correctness picks the default; fp16 stays one explicit option away.
+test('preferredDtypeOrder prefers q4 on both backends', () => {
+  assert.equal(preferredDtypeOrder('webgpu')[0], 'q4');
   assert.equal(preferredDtypeOrder('wasm')[0], 'q4');
+  assert.equal(preferredDtypeOrder('webgpu')[1], 'fp16', 'fp16 stays available, just not first');
+});
+
+// q8 measured 0/3 on tool calling — it narrates instead of emitting a call.
+// It must never be reached before q4 or fp16 by the automatic probe.
+test('q8 is never the first choice on either backend', () => {
+  for (const dev of ['webgpu', 'wasm']) {
+    assert.notEqual(preferredDtypeOrder(dev)[0], 'q8');
+  }
 });
 
 test('addDocument chunks, embeds and indexes', async () => {

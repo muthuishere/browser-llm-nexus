@@ -38,8 +38,28 @@ preferred order differs:
 
 | Backend | Order tried |
 |---|---|
-| `webgpu` | `fp16` → `q4` → `q8` → `fp32` |
+| `webgpu` | `q4` → `fp16` → `q8` → `fp32` |
 | `wasm` / CPU | `q4` → `q8` → `fp16` → `fp32` |
+
+`q4` comes first on **both** backends, which is not the conventional choice —
+a GPU has the bandwidth for `fp16`, so preferring it looks obviously right. On
+small models it isn't. Measured on Qwen2.5-0.5B-Instruct across three
+tool-calling questions (`npm run test:models` reproduces this):
+
+| dtype | Called the tool | Answered correctly from the result |
+|---|---|---|
+| `q4` | 3/3 | **3/3** |
+| `fp16` | 3/3 | 2/3 — read `1096637` back as `109,663,700` |
+| `q8` | 0/3 | 0/3 — narrates *"I would need to use a specific tool"* and never calls |
+
+A faster answer that silently corrupts a tool result is worse than a slower
+correct one, so correctness picks the default. `fp16` is still one explicit
+option away, and a larger model may genuinely prefer it — state it when you
+know:
+
+```ts
+await NexusChat.load(source, { dtype: 'fp16' });
+```
 
 The library **probes** which variants your source actually serves — a `HEAD` request per
 candidate against `<base>/<model>/onnx/<file>` — and takes the first that exists. It never
