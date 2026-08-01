@@ -17,6 +17,28 @@ export interface RuntimeOptions {
   modelsUrl?: string;
 }
 
+export type Device = 'auto' | 'webgpu' | 'wasm' | 'cpu' | (string & {});
+
+/** Pick the fastest available backend: WebGPU when the browser exposes a usable
+ *  adapter, otherwise WASM (CPU). Everything in this library works on both —
+ *  GPU is an accelerator, never a requirement. */
+export async function detectDevice(preferred: Device = 'auto'): Promise<string> {
+  if (preferred !== 'auto') return preferred;
+  const gpu = (globalThis.navigator as { gpu?: { requestAdapter(): Promise<unknown> } } | undefined)?.gpu;
+  if (gpu) {
+    try {
+      if (await gpu.requestAdapter()) return 'webgpu';
+    } catch { /* fall through to wasm */ }
+  }
+  return 'wasm';
+}
+
+/** dtype that actually works well on a given backend. WebGPU prefers fp16;
+ *  WASM/CPU prefers the quantized variants. */
+export function preferredDtypeOrder(device: string): readonly string[] {
+  return device === 'webgpu' ? (['fp16', 'q4', 'q8', 'fp32'] as const) : DTYPE_ORDER;
+}
+
 export async function resolveTransformers(opts: RuntimeOptions): Promise<TransformersLike> {
   const tjs = opts.transformers ?? ((await import(/* @vite-ignore */ CDN)) as TransformersLike);
   const base = opts.modelsUrl ?? '/models/';
@@ -34,9 +56,10 @@ export const DTYPE_FILES: Record<string, string> = {
 };
 export const DTYPE_ORDER = ['q4', 'q8', 'fp16', 'fp32'] as const;
 
-/** Probe which dtype variants exist for a converted model and return the best. */
-export async function detectDtype(tjs: TransformersLike, modelId: string): Promise<string> {
-  for (const d of DTYPE_ORDER) {
+/** Probe which dtype variants exist for a converted model and return the best
+ *  one for the given backend. */
+export async function detectDtype(tjs: TransformersLike, modelId: string, device = 'wasm'): Promise<string> {
+  for (const d of preferredDtypeOrder(device)) {
     try {
       const res = await fetch(`${tjs.env.localModelPath}${modelId}/onnx/${DTYPE_FILES[d]}`, { method: 'HEAD' });
       if (res.ok) return d;

@@ -1,7 +1,7 @@
 import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
 import { parseToolCalls, stripThinking, type ToolCall } from './toolcalls.ts';
-import { resolveTransformers, detectDtype, type RuntimeOptions, type TransformersLike } from './runtime.ts';
+import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
 
 export type ToolHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
@@ -22,7 +22,8 @@ export interface ChatMessage {
 
 export interface LoadOptions extends RuntimeOptions {
   dtype?: string | 'auto';
-  device?: string;
+  /** 'auto' (default) uses WebGPU when available, else WASM/CPU. */
+  device?: Device;
   onProgress?: (p: unknown) => void;
 }
 
@@ -57,6 +58,7 @@ export class NexusChat extends Hooks<ChatEvents> {
   private constructor(
     private generator: any,
     readonly dtype: string,
+    readonly device: string,
     private tjs: TransformersLike,
   ) {
     super();
@@ -64,14 +66,15 @@ export class NexusChat extends Hooks<ChatEvents> {
 
   static async load(modelId: string, opts: LoadOptions = {}): Promise<NexusChat> {
     const tjs = await resolveTransformers(opts);
-    const dtype = !opts.dtype || opts.dtype === 'auto' ? await detectDtype(tjs, modelId) : opts.dtype;
+    const device = await detectDevice(opts.device ?? 'auto');
+    const dtype = !opts.dtype || opts.dtype === 'auto' ? await detectDtype(tjs, modelId, device) : opts.dtype;
     const t0 = Date.now();
     const generator = await tjs.pipeline('text-generation', modelId, {
       dtype,
-      device: opts.device ?? 'wasm',
+      device,
       progress_callback: opts.onProgress,
     });
-    const chat = new NexusChat(generator, dtype, tjs);
+    const chat = new NexusChat(generator, dtype, device, tjs);
     chat.metrics.time('load', Date.now() - t0);
     return chat;
   }

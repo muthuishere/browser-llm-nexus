@@ -1,7 +1,7 @@
 {
   "name": "browser-llm-nexus",
-  "version": "0.1.1",
-  "description": "Run LLMs in the browser on plain CPU: tool calling, embeddings, RAG, model bundles, and metrics — one small hooks-style TypeScript library over Transformers.js (injectable).",
+  "version": "0.2.0",
+  "description": "Run LLMs in the browser — GPU or CPU, same API. Tool calling, embeddings, RAG, offline knowledge bundles, and metrics. Hooks-style TypeScript over Transformers.js (injectable).",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -44,6 +44,9 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "keywords": [
+    "webgpu",
+    "rag",
+    "knowledge-base",
     "llm",
     "browser",
     "wasm",

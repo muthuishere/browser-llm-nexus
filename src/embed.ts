@@ -1,26 +1,34 @@
 import { Metrics } from './metrics.ts';
-import { resolveTransformers, type RuntimeOptions } from './runtime.ts';
+import { resolveTransformers, detectDevice, type Device, type RuntimeOptions } from './runtime.ts';
 
 export interface EmbedOptions extends RuntimeOptions {
   dtype?: string;
-  device?: string;
+  /** 'auto' (default) uses WebGPU when available, else WASM/CPU. */
+  device?: Device;
   onProgress?: (p: unknown) => void;
+  /** Load from the HF Hub instead of local converted models. */
+  remote?: boolean;
 }
 
 /** Embedding model wrapper (feature-extraction) with batching + similarity. */
 export class NexusEmbedder {
   readonly metrics = new Metrics();
 
-  private constructor(private extractor: any) {}
+  private constructor(private extractor: any, readonly device: string) {}
 
   static async load(modelId: string, opts: EmbedOptions = {}): Promise<NexusEmbedder> {
     const tjs = await resolveTransformers(opts);
+    if (opts.remote) {
+      tjs.env.allowRemoteModels = true;
+      tjs.env.allowLocalModels = false;
+    }
+    const device = await detectDevice(opts.device ?? 'auto');
     const extractor = await tjs.pipeline('feature-extraction', modelId, {
       dtype: opts.dtype ?? 'q8',
-      device: opts.device ?? 'wasm',
+      device,
       progress_callback: opts.onProgress,
     });
-    return new NexusEmbedder(extractor);
+    return new NexusEmbedder(extractor, device);
   }
 
   /** Embed one text into a normalized vector. */

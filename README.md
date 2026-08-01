@@ -1,12 +1,29 @@
 # browser-llm-nexus
 
-Run LLMs in the browser on plain CPU — tool calling, embeddings, RAG, offline model
-bundles, and metrics. One small hooks-style TypeScript library over
+**Run LLMs in the browser — GPU or CPU, same API.** Tool calling, embeddings, RAG,
+offline knowledge bundles, and metrics in one small hooks-style TypeScript library over
 [Transformers.js](https://github.com/huggingface/transformers.js) (injectable — bring
 the full build, a lite build, or anything shape-compatible).
 
+```bash
+npm install browser-llm-nexus
+```
+
+By default every loader picks **WebGPU when the browser has it, WASM/CPU otherwise** —
+your code doesn't change, and neither does the API. GPU is an accelerator here, never a
+requirement, so the same page works on a workstation and a locked-down laptop.
+
+```ts
+await NexusChat.load(model);                    // auto: webgpu → wasm
+await NexusChat.load(model, { device: 'wasm' }); // force CPU
+```
+
+dtype selection follows the backend too (fp16 first on GPU, q4 first on CPU) among the
+variants that actually exist for your model.
+
 Models come from [hf2browser](https://github.com/muthuishere/hf2browser), which
-converts any Hugging Face LLM to the layout this library loads.
+converts any Hugging Face LLM to the layout this library loads — or point
+`modelsUrl` at any host serving the same layout.
 
 ## Chat with tool calling
 
@@ -39,6 +56,36 @@ await chat.evalTools(`
     async () => ({ watches: 7 }));
 `);
 ```
+
+## Offline knowledge system in one object
+
+Documents in, grounded answers out — chunking, embedding, indexing, retrieval and
+context assembly handled for you. This is the whole
+[offline-llm-knowledge-system](https://github.com/muthuishere/offline-llm-knowledge-system)
+pattern as an API.
+
+```ts
+import { NexusKnowledge } from 'browser-llm-nexus';
+
+const kb = await NexusKnowledge.create({ chat: 'Qwen/Qwen3-0.6B' });  // embedder defaults to bge-small
+await kb.addDocument({ id: 'handbook', title: 'Handbook', text: handbookText });
+
+kb.on('token', t => render(t));
+const answer = await kb.ask('What is the refund policy?');
+```
+
+Ship it somewhere with no internet:
+
+```ts
+const bundle = await kb.export({ includeModels: true });  // index + weights from the browser cache
+await fs.writeFile('kb.json', JSON.stringify(bundle));
+
+// on the air-gapped machine — restores weights and vectors, re-embeds nothing
+const kb2 = await NexusKnowledge.import(JSON.parse(await fs.readFile('kb.json')));
+```
+
+`export({ includeText: false })` ships vectors without the source text when the
+documents themselves shouldn't travel.
 
 ## Embeddings + RAG
 

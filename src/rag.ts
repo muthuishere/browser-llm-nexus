@@ -30,6 +30,11 @@ export class MemoryIndex {
     return this.chunks.length;
   }
 
+  /** All indexed chunks (insertion order). */
+  all(): readonly Chunk[] {
+    return this.chunks;
+  }
+
   /** Top-k most similar chunks to the query vector. */
   search(queryVector: Float32Array, k = 5): SearchHit[] {
     return this.chunks
