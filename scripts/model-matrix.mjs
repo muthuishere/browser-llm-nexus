@@ -114,5 +114,36 @@ for (const [k, v] of byCombo) {
   console.log(pad(model, 38) + pad(dtype, 6) + pad(`${v.ok}/${v.n}`, 7) + pad(`${v.ok}/${v.n}`, 10) +
     verdict + (v.deg ? `  (${v.deg} degenerate)` : ''));
 }
+
+// ── The verdict: one answer per model ──────────────────────────────────────
+// The point of running this is to be told what to use, not to read a grid.
+// The best quantization is model-specific — Qwen2.5 is reliable at q4 and
+// useless at q8; Qwen3 is the exact reverse — so there is nothing to infer
+// from another model's result.
+console.log('\nVERDICT');
+console.log('-'.repeat(78));
+let anyUsable = false;
+for (const model of MODELS) {
+  const combos = [...byCombo.entries()]
+    .filter(([k]) => k.startsWith(model + '|'))
+    .map(([k, v]) => ({ dtype: k.split('|')[1], ...v }))
+    .sort((a, b) => b.ok - a.ok || a.deg - b.deg);
+  const best = combos[0];
+  if (!best) { console.log(`${model}\n  no result — every dtype failed to load`); continue; }
+  if (best.ok === best.n) {
+    anyUsable = true;
+    console.log(`${model}\n  USE dtype '${best.dtype}' — ${best.ok}/${best.n} tool calls correct`);
+    console.log(`  await NexusChat.load({ hub: '${model}' }, { dtype: '${best.dtype}' });`);
+  } else if (best.ok > 0) {
+    console.log(`${model}\n  BEST is '${best.dtype}' at ${best.ok}/${best.n} — flaky, not safe to ship`);
+  } else {
+    console.log(`${model}\n  NOT USABLE for tool calling at any dtype tried (${combos.map((c) => c.dtype).join(', ')})`);
+    console.log('  Models below ~0.5B generally cannot pick a tool name from a list.');
+  }
+}
+
 console.log('\nFull rows:');
 console.log(JSON.stringify(rows, null, 1));
+
+// Exit non-zero when nothing is shippable, so this can gate CI.
+if (!anyUsable) process.exitCode = 1;

@@ -114,11 +114,26 @@ degenerated. Around 0.5B is where tool calling starts working at all.
 you can see the model naming a tool that doesn't exist rather than wondering
 why answers are vague.
 
-Verify before you ship:
+### Check your own model
+
+Point it at any model and it tells you which quantization to use — or that the
+model can't do the job:
 
 ```bash
 npm run test:models -- --models your-org/your-model --dtypes q4,q8,fp16
 ```
+
+```
+VERDICT
+------------------------------------------------------------------------------
+onnx-community/Qwen2.5-0.5B-Instruct
+  USE dtype 'q4' — 3/3 tool calls correct
+  await NexusChat.load({ hub: 'onnx-community/Qwen2.5-0.5B-Instruct' }, { dtype: 'q4' });
+```
+
+A flaky model reports its best score and says it isn't safe to ship; one that
+never calls says so outright. The run **exits non-zero when nothing is
+usable**, so it works as a CI gate before you pin a model.
 
 ## Every call format, one parser
 
