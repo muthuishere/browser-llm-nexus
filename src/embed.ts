@@ -1,5 +1,7 @@
 import { Metrics } from './metrics.ts';
 import { resolveTransformers, detectDevice, type Device, type RuntimeOptions } from './runtime.ts';
+import { importModel } from './model.ts';
+import type { ArchiveSource } from './archive.ts';
 
 export interface EmbedOptions extends RuntimeOptions {
   dtype?: string;
@@ -8,6 +10,9 @@ export interface EmbedOptions extends RuntimeOptions {
   onProgress?: (p: unknown) => void;
   /** Load from the HF Hub instead of local converted models. */
   remote?: boolean;
+  /** Load from a model archive (URL, File, Blob or bytes) — restored into the
+   *  browser cache first, so nothing hits the network afterwards. */
+  archive?: ArchiveSource;
 }
 
 /** Embedding model wrapper (feature-extraction) with batching + similarity. */
@@ -16,7 +21,14 @@ export class NexusEmbedder {
 
   private constructor(private extractor: any, readonly device: string) {}
 
+  /** Load straight from a model archive; the id comes from its manifest. */
+  static async fromArchive(archive: ArchiveSource, opts: Omit<EmbedOptions, 'archive'> = {}): Promise<NexusEmbedder> {
+    const manifest = await importModel(archive, { modelsUrl: opts.modelsUrl });
+    return NexusEmbedder.load(manifest.modelId, opts);
+  }
+
   static async load(modelId: string, opts: EmbedOptions = {}): Promise<NexusEmbedder> {
+    if (opts.archive) await importModel(opts.archive, { modelsUrl: opts.modelsUrl });
     const tjs = await resolveTransformers(opts);
     if (opts.remote) {
       tjs.env.allowRemoteModels = true;

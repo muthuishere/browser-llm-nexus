@@ -8,7 +8,9 @@ export interface CacheEntry {
   data: ArrayBuffer;
 }
 
-const CACHE_NAME = 'transformers-cache';
+/** The cache name Transformers.js uses — and the one
+ *  offline-llm-knowledge-system restores into. */
+export const CACHE_NAME = 'transformers-cache';
 
 /** Drain the Transformers.js cache into portable entries.
  *  Pass a filter to keep only some URLs (default: everything). */

@@ -1,7 +1,7 @@
 {
   "name": "browser-llm-nexus",
-  "version": "0.2.0",
-  "description": "Run LLMs in the browser \u2014 GPU or CPU, same API. Tool calling, embeddings, RAG, offline knowledge bundles, and metrics. Hooks-style TypeScript over Transformers.js (injectable).",
+  "version": "0.3.0",
+  "description": "Run LLMs in the browser — GPU or CPU, same API. Tool calling, embeddings, RAG, offline knowledge bundles, and metrics. Hooks-style TypeScript over Transformers.js (injectable).",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,10 +22,6 @@
       "types": "./dist/rag.d.ts",
       "default": "./dist/rag.js"
     },
-    "./bundle": {
-      "types": "./dist/bundle.d.ts",
-      "default": "./dist/bundle.js"
-    },
     "./metrics": {
       "types": "./dist/metrics.d.ts",
       "default": "./dist/metrics.js"
@@ -33,6 +29,18 @@
     "./toolcalls": {
       "types": "./dist/toolcalls.d.ts",
       "default": "./dist/toolcalls.js"
+    },
+    "./archive": {
+      "types": "./dist/archive.d.ts",
+      "default": "./dist/archive.js"
+    },
+    "./model": {
+      "types": "./dist/model.d.ts",
+      "default": "./dist/model.js"
+    },
+    "./bundle": {
+      "types": "./dist/bundle.d.ts",
+      "default": "./dist/bundle.js"
     }
   },
   "files": [
@@ -65,13 +73,18 @@
     "url": "git+https://github.com/muthuishere/browser-llm-nexus.git"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "fflate": "^0.8.2"
   },
   "peerDependencies": {
-    "@huggingface/transformers": ">=3.5.0"
+    "@huggingface/transformers": ">=3.5.0",
+    "fflate": ">=0.8.0"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
+      "optional": true
+    },
+    "fflate": {
       "optional": true
     }
   },

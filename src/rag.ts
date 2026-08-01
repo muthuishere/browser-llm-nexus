@@ -1,4 +1,13 @@
 import { similarity } from './embed.ts';
+import {
+  encodeJSON,
+  decodeJSON,
+  filesToZip,
+  filesFromZip,
+  requireFile,
+  type ArchiveSource,
+  type ZipOptions,
+} from './archive.ts';
 
 export interface Chunk {
   id: string;
@@ -67,6 +76,61 @@ export class MemoryIndex {
     }
     return idx;
   }
+}
+
+/** Serialize an index to a flat file map — vectors stay raw Float32.
+ *
+ *    manifest.json  { kind: 'rag', count, dims, createdAt }
+ *    chunks.json    [{ id, text, meta }]
+ *    vectors.bin    Float32 matrix, row-major
+ */
+export function indexToFiles(index: MemoryIndex): Map<string, Uint8Array> {
+  const chunks = index.all();
+  const dims = chunks[0]?.vector.length ?? 0;
+  const files = new Map<string, Uint8Array>();
+
+  files.set(
+    'manifest.json',
+    encodeJSON({ kind: 'rag', count: chunks.length, dims, createdAt: new Date().toISOString() }),
+  );
+  files.set('chunks.json', encodeJSON(chunks.map((c) => ({ id: c.id, text: c.text, meta: c.meta }))));
+
+  const matrix = new Float32Array(chunks.length * dims);
+  chunks.forEach((c, i) => matrix.set(c.vector, i * dims));
+  files.set('vectors.bin', new Uint8Array(matrix.buffer));
+  return files;
+}
+
+export function indexFromFiles(files: Map<string, Uint8Array>): MemoryIndex {
+  const manifest = decodeJSON<{ dims: number }>(requireFile(files, 'manifest.json'));
+  const meta = decodeJSON<Array<{ id: string; text: string; meta?: Record<string, unknown> }>>(
+    requireFile(files, 'chunks.json'),
+  );
+  const raw = requireFile(files, 'vectors.bin');
+  // Copy first: the zip reader's buffer may not be 4-byte aligned.
+  const matrix = new Float32Array(raw.slice().buffer);
+  const dims = manifest.dims;
+
+  const index = new MemoryIndex();
+  meta.forEach((c, i) => {
+    index.add({
+      id: c.id,
+      text: c.text,
+      meta: c.meta,
+      vector: matrix.slice(i * dims, (i + 1) * dims),
+    });
+  });
+  return index;
+}
+
+/** Pack a vector store into a portable zip. */
+export function exportIndex(index: MemoryIndex, opts: ZipOptions = {}): Promise<Uint8Array> {
+  return filesToZip(indexToFiles(index), { level: 6, ...opts });
+}
+
+/** Read a vector store back from a zip, URL, File or bytes. */
+export async function importIndex(source: ArchiveSource, opts: ZipOptions = {}): Promise<MemoryIndex> {
+  return indexFromFiles(await filesFromZip(source, opts));
 }
 
 /** Split text into ~size-char chunks on sentence-ish boundaries. */

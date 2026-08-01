@@ -1,7 +1,9 @@
 // Knowledge + device tests using fake models — no network, no weights.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fflate from 'fflate';
 import { NexusKnowledge } from '../dist/knowledge.js';
+import { exportIndex } from '../dist/rag.js';
 import { detectDevice, preferredDtypeOrder } from '../dist/runtime.js';
 import { MemoryIndex } from '../dist/rag.js';
 
@@ -106,28 +108,63 @@ test('ask without documents skips the context block', async () => {
   assert.doesNotMatch(chat.seen[0], /Context:/);
 });
 
-test('export/import round-trips the index without re-embedding', async () => {
+test('knowledge archive composes manifest + rag/, without models by default', async () => {
   const { kb } = await makeKB();
   await kb.addDocument({ id: 'a', title: 'Handbook', text: 'refunds within thirty days' });
-  const bundle = await kb.export();
+  const files = await kb.toFiles();
 
-  assert.equal(bundle.version, 1);
-  assert.equal(bundle.docs[0].title, 'Handbook');
-  assert.ok(bundle.index.chunks.length > 0);
+  assert.ok(files.has('manifest.json'));
+  assert.ok(files.has('rag/vectors.bin'), 'rag store is nested under rag/');
+  assert.ok(![...files.keys()].some((k) => k.startsWith('models/')), 'no weights unless asked');
 
-  const restored = await NexusKnowledge.import(bundle, { chat: makeFakeChat(), embedder: fakeEmbedder });
+  const manifest = JSON.parse(new TextDecoder().decode(files.get('manifest.json')));
+  assert.equal(manifest.kind, 'knowledge');
+  assert.equal(manifest.docs[0].title, 'Handbook');
+  assert.deepEqual(manifest.contains, { rag: true, chatModel: false, embedModel: false });
+});
+
+test('export/import zip round-trips the index without re-embedding', async () => {
+  const { kb } = await makeKB();
+  await kb.addDocument({ id: 'a', title: 'Handbook', text: 'refunds within thirty days' });
+  const zip = await kb.exportZip({ zip: fflate });
+
+  const restored = await NexusKnowledge.importZip(zip, {
+    zip: fflate,
+    chat: makeFakeChat(),
+    embedder: fakeEmbedder,
+  });
   assert.equal(restored.index.size, kb.index.size);
   assert.equal(restored.docs.get('a').title, 'Handbook');
   const hits = await restored.retrieve('refunds', 1);
   assert.match(hits[0].text, /refunds/);
 });
 
-test('export can omit document text (index-only bundle)', async () => {
+test('inspect reads the manifest without loading models', async () => {
+  const { kb } = await makeKB();
+  await kb.addDocument({ id: 'a', text: 'text' });
+  const zip = await kb.exportZip({ zip: fflate });
+  const manifest = await NexusKnowledge.inspect(zip, { zip: fflate });
+  assert.equal(manifest.kind, 'knowledge');
+  assert.equal(manifest.models.embedder, '(provided)');
+});
+
+test('export can omit document text (vectors still travel)', async () => {
   const { kb } = await makeKB();
   await kb.addDocument({ id: 'a', text: 'secret internal text' });
-  const bundle = await kb.export({ includeText: false });
-  assert.equal(bundle.docs[0].text, undefined);
-  assert.ok(bundle.index.chunks.length > 0, 'vectors still travel');
+  const files = await kb.toFiles({ includeText: false });
+  const manifest = JSON.parse(new TextDecoder().decode(files.get('manifest.json')));
+  assert.equal(manifest.docs[0].text, undefined);
+  assert.ok(files.get('rag/vectors.bin').byteLength > 0);
+});
+
+test('importZip rejects a non-knowledge archive', async () => {
+  const { kb } = await makeKB();
+  await kb.addDocument({ id: 'a', text: 'x' });
+  const ragOnly = await exportIndex(kb.index, { zip: fflate });
+  await assert.rejects(
+    () => NexusKnowledge.importZip(ragOnly, { zip: fflate, chat: makeFakeChat(), embedder: fakeEmbedder }),
+    /not a knowledge archive/,
+  );
 });
 
 test('hooks fire for indexing and answering', async () => {

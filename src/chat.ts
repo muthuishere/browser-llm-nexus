@@ -2,6 +2,8 @@ import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
 import { parseToolCalls, stripThinking, type ToolCall } from './toolcalls.ts';
 import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
+import { importModel } from './model.ts';
+import type { ArchiveSource } from './archive.ts';
 
 export type ToolHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
@@ -25,6 +27,10 @@ export interface LoadOptions extends RuntimeOptions {
   /** 'auto' (default) uses WebGPU when available, else WASM/CPU. */
   device?: Device;
   onProgress?: (p: unknown) => void;
+  /** Load from a model archive instead of a served folder: a URL, a File from
+   *  an <input type="file">, a Blob, or raw bytes. The archive is restored
+   *  into the browser cache first, so nothing else hits the network. */
+  archive?: ArchiveSource;
 }
 
 export interface ChatOptions {
@@ -64,7 +70,15 @@ export class NexusChat extends Hooks<ChatEvents> {
     super();
   }
 
+  /** Load from a model archive (URL, File, Blob or bytes) without needing the
+   *  model id up front — it comes from the archive's manifest. */
+  static async fromArchive(archive: ArchiveSource, opts: Omit<LoadOptions, 'archive'> = {}): Promise<NexusChat> {
+    const manifest = await importModel(archive, { modelsUrl: opts.modelsUrl });
+    return NexusChat.load(manifest.modelId, opts);
+  }
+
   static async load(modelId: string, opts: LoadOptions = {}): Promise<NexusChat> {
+    if (opts.archive) await importModel(opts.archive, { modelsUrl: opts.modelsUrl });
     const tjs = await resolveTransformers(opts);
     const device = await detectDevice(opts.device ?? 'auto');
     const dtype = !opts.dtype || opts.dtype === 'auto' ? await detectDtype(tjs, modelId, device) : opts.dtype;

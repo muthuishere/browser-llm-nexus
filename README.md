@@ -57,6 +57,45 @@ await chat.evalTools(`
 `);
 ```
 
+## Three portable artifacts
+
+Everything that can travel is an independent artifact with its own
+export/import. Each one accepts a **URL, a `File` from an `<input>`, a `Blob`,
+or raw bytes** — so "load from a server" and "load from a file the user picked"
+are the same call.
+
+```ts
+import { exportModel, importModel, exportIndex, importIndex } from 'browser-llm-nexus';
+
+// 1. a chat model — or any model; an embedder packs identically
+const zip = await exportModel('Qwen/Qwen3-0.6B', { dtypes: ['q4'] });
+await importModel(zip);            // restores into the browser cache
+const chat = await NexusChat.fromArchive(zip);          // …or load straight from it
+const chat2 = await NexusChat.load('Qwen/Qwen3-0.6B', { archive: fileFromInput });
+
+// 2. an embedding model — same functions
+const embedder = await NexusEmbedder.fromArchive('/api/model.zip?model=bge-small');
+
+// 3. a RAG store — vectors as raw Float32, not JSON numbers
+const ragZip = await exportIndex(kb.index);
+const index = await importIndex(ragZip);
+```
+
+`inspectModel(source)` reads an archive's manifest without restoring anything.
+
+A model archive is just:
+
+```
+manifest.json   { kind: 'model', modelId, dtypes, files: [{ file, url, path }] }
+files/0.bin     each file's bytes
+```
+
+Import writes every file into the Cache API under the URL the runtime will
+request, so the next `load()` makes zero network calls.
+[hf2browser](https://github.com/muthuishere/hf2browser) serves exactly this
+format from `GET /api/model.zip?model=<id>&dtype=q4`, so a converted model is
+one URL away from running offline.
+
 ## Offline knowledge system in one object
 
 Documents in, grounded answers out — chunking, embedding, indexing, retrieval and
@@ -74,18 +113,29 @@ kb.on('token', t => render(t));
 const answer = await kb.ask('What is the refund policy?');
 ```
 
+A knowledge archive is simply the three artifacts composed into one zip:
+
+```
+manifest.json          { kind: 'knowledge', models, docs, contains }
+rag/                   the vector store
+models/chat/model.zip  optional — a full model archive, nested
+models/embedder/model.zip
+```
+
 Ship it somewhere with no internet:
 
 ```ts
-const bundle = await kb.export({ includeModels: true });  // index + weights from the browser cache
-await fs.writeFile('kb.json', JSON.stringify(bundle));
+const zip = await kb.exportZip({ includeModels: true });   // rag + both models
+download(zip, 'handbook-kb.zip');
 
 // on the air-gapped machine — restores weights and vectors, re-embeds nothing
-const kb2 = await NexusKnowledge.import(JSON.parse(await fs.readFile('kb.json')));
+const kb2 = await NexusKnowledge.importZip(fileFromInput);
+const kb3 = await NexusKnowledge.importZip('/bundles/handbook-kb.zip');  // or a URL
 ```
 
-`export({ includeText: false })` ships vectors without the source text when the
-documents themselves shouldn't travel.
+`exportZip({ includeText: false })` ships vectors without the source text when
+the documents themselves shouldn't travel, and
+`NexusKnowledge.inspect(source)` reads the manifest without loading any models.
 
 ## Embeddings + RAG
 

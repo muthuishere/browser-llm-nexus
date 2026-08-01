@@ -2,8 +2,19 @@ import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
 import { NexusChat, type LoadOptions } from './chat.ts';
 import { NexusEmbedder, type EmbedOptions } from './embed.ts';
-import { MemoryIndex, chunkText, type Chunk } from './rag.ts';
-import { exportCache, importCache, type CacheEntry } from './bundle.ts';
+import { MemoryIndex, chunkText, indexToFiles, indexFromFiles, type Chunk } from './rag.ts';
+import { exportModel, importModel, type ExportModelOptions } from './model.ts';
+import {
+  encodeJSON,
+  decodeJSON,
+  filesToZip,
+  filesFromZip,
+  prefixFiles,
+  stripPrefix,
+  requireFile,
+  type ArchiveSource,
+  type ZipOptions,
+} from './archive.ts';
 
 export interface KnowledgeOptions {
   chat: string | NexusChat;
@@ -24,15 +35,28 @@ export interface KnowledgeDoc {
   meta?: Record<string, unknown>;
 }
 
-/** A portable knowledge bundle: the index plus (optionally) the model weights
- *  captured from the browser cache, so the whole thing works air-gapped. */
-export interface KnowledgeBundle {
+export interface KnowledgeManifest {
+  kind: 'knowledge';
   version: 1;
   createdAt: string;
   models: { chat: string; embedder: string };
-  index: ReturnType<MemoryIndex['serialize']>;
   docs: Array<Omit<KnowledgeDoc, 'text'> & { text?: string }>;
-  cache?: Array<{ url: string; data: number[] }>;
+  /** Which parts are actually inside this archive. */
+  contains: { rag: boolean; chatModel: boolean; embedModel: boolean };
+}
+
+export interface ExportKnowledgeOptions extends ZipOptions {
+  /** Bundle the chat model weights (big — makes the archive self-contained). */
+  includeChatModel?: boolean;
+  /** Bundle the embedding model weights. */
+  includeEmbedModel?: boolean;
+  /** Shorthand for both of the above. */
+  includeModels?: boolean;
+  /** Keep the original document text in the archive. Default true. */
+  includeText?: boolean;
+  /** Passed through when packing models (dtype filter, modelsUrl, progress). */
+  modelOptions?: ExportModelOptions;
+  onProgress?: (stage: string) => void;
 }
 
 type KnowledgeEvents = {
@@ -44,21 +68,29 @@ type KnowledgeEvents = {
 };
 
 const DEFAULT_EMBEDDER = 'Xenova/bge-small-en-v1.5';
+const RAG_PREFIX = 'rag/';
+const CHAT_MODEL_PREFIX = 'models/chat/';
+const EMBED_MODEL_PREFIX = 'models/embedder/';
 
 /**
- * Offline knowledge system in one object: documents in, grounded answers out.
- * Runs on WebGPU when available, CPU/WASM otherwise — same API either way.
+ * Offline knowledge system: documents in, grounded answers out — and the whole
+ * thing packs into one zip.
+ *
+ * This is a *composition* of three independently portable artifacts: the chat
+ * model, the embedding model, and the RAG store. Each of those has its own
+ * export/import (`exportModel`/`importModel`, `exportIndex`/`importIndex`) if
+ * you want to ship them separately; this class just zips all three together.
  *
  *   const kb = await NexusKnowledge.create({ chat: 'Qwen/Qwen3-0.6B' });
  *   await kb.addDocument({ id: 'handbook', text: handbookText });
  *   const answer = await kb.ask('What is the refund policy?');
  *
- *   const bundle = await kb.export({ includeModels: true });  // ship it offline
- *   const kb2 = await NexusKnowledge.import(bundle);
+ *   const zip = await kb.exportZip({ includeModels: true });
+ *   const kb2 = await NexusKnowledge.importZip(zip);   // works offline
  */
 export class NexusKnowledge extends Hooks<KnowledgeEvents> {
   readonly metrics = new Metrics();
-  readonly index = new MemoryIndex();
+  index = new MemoryIndex();
   readonly docs = new Map<string, KnowledgeDoc>();
 
   chunkSize: number;
@@ -143,46 +175,83 @@ export class NexusKnowledge extends Hooks<KnowledgeEvents> {
     return answer;
   }
 
-  /** Serialize to a portable bundle. With includeModels, also captures the
-   *  browser's model cache so the bundle runs with no network at all. */
-  async export(opts: { includeModels?: boolean; includeText?: boolean } = {}): Promise<KnowledgeBundle> {
-    const bundle: KnowledgeBundle = {
+  /** Serialize to a flat file map: manifest + rag/ + optionally the models. */
+  async toFiles(opts: ExportKnowledgeOptions = {}): Promise<Map<string, Uint8Array>> {
+    const wantChat = opts.includeChatModel ?? opts.includeModels ?? false;
+    const wantEmbed = opts.includeEmbedModel ?? opts.includeModels ?? false;
+
+    const files = new Map<string, Uint8Array>();
+    opts.onProgress?.('rag');
+    for (const [name, data] of prefixFiles(indexToFiles(this.index), RAG_PREFIX)) {
+      files.set(name, data);
+    }
+
+    if (wantChat) {
+      opts.onProgress?.('chat model');
+      const zip = await exportModel(this.modelIds.chat, { ...opts.modelOptions, zip: opts.zip });
+      files.set(`${CHAT_MODEL_PREFIX}model.zip`, zip);
+    }
+    if (wantEmbed) {
+      opts.onProgress?.('embedding model');
+      const zip = await exportModel(this.modelIds.embedder, { ...opts.modelOptions, zip: opts.zip });
+      files.set(`${EMBED_MODEL_PREFIX}model.zip`, zip);
+    }
+
+    const manifest: KnowledgeManifest = {
+      kind: 'knowledge',
       version: 1,
       createdAt: new Date().toISOString(),
       models: this.modelIds,
-      index: this.index.serialize(),
       docs: [...this.docs.values()].map((d) => ({
         id: d.id,
         title: d.title,
         meta: d.meta,
         ...(opts.includeText === false ? {} : { text: d.text }),
       })),
+      contains: { rag: true, chatModel: wantChat, embedModel: wantEmbed },
     };
-    if (opts.includeModels) {
-      const entries = await exportCache();
-      bundle.cache = entries.map((e) => ({ url: e.url, data: Array.from(new Uint8Array(e.data)) }));
-    }
-    return bundle;
+    files.set('manifest.json', encodeJSON(manifest));
+    return files;
   }
 
-  /** Restore a bundle: rehydrates the index (and model cache, if bundled)
-   *  without re-embedding anything. */
-  static async import(bundle: KnowledgeBundle, opts: Partial<KnowledgeOptions> = {}): Promise<NexusKnowledge> {
-    if (bundle.cache?.length) {
-      const entries: CacheEntry[] = bundle.cache.map((c) => ({
-        url: c.url,
-        data: Uint8Array.from(c.data).buffer,
-      }));
-      await importCache(entries);
-    }
+  /** Pack everything into one zip — the format to actually ship. */
+  async exportZip(opts: ExportKnowledgeOptions = {}): Promise<Uint8Array> {
+    return filesToZip(await this.toFiles(opts), { level: 6, ...opts });
+  }
+
+  /**
+   * Restore from an archive: rehydrates the vector store (no re-embedding) and
+   * any bundled model weights, then loads the models — from cache, so an
+   * archive exported with `includeModels` needs no network at all.
+   * Accepts a URL, a File from an <input>, a Blob, or raw bytes.
+   */
+  static async importZip(
+    source: ArchiveSource,
+    opts: Partial<KnowledgeOptions> & ZipOptions = {},
+  ): Promise<NexusKnowledge> {
+    const files = await filesFromZip(source, opts);
+    const manifest = decodeJSON<KnowledgeManifest>(requireFile(files, 'manifest.json'));
+    if (manifest.kind !== 'knowledge') throw new Error(`not a knowledge archive (kind=${manifest.kind})`);
+
+    const chatZip = files.get(`${CHAT_MODEL_PREFIX}model.zip`);
+    if (chatZip) await importModel(chatZip, { zip: opts.zip });
+    const embedZip = files.get(`${EMBED_MODEL_PREFIX}model.zip`);
+    if (embedZip) await importModel(embedZip, { zip: opts.zip });
+
     const kb = await NexusKnowledge.create({
-      chat: opts.chat ?? bundle.models.chat,
-      embedder: opts.embedder ?? bundle.models.embedder,
+      chat: opts.chat ?? manifest.models.chat,
+      embedder: opts.embedder ?? manifest.models.embedder,
       ...opts,
     });
-    kb.index.addAll([...MemoryIndex.restore(bundle.index).all()]);
-    for (const d of bundle.docs) kb.docs.set(d.id, { ...d, text: d.text ?? '' });
+    kb.index = indexFromFiles(stripPrefix(files, RAG_PREFIX));
+    for (const d of manifest.docs) kb.docs.set(d.id, { ...d, text: d.text ?? '' });
     return kb;
+  }
+
+  /** Peek at an archive's manifest without loading any models. */
+  static async inspect(source: ArchiveSource, opts: ZipOptions = {}): Promise<KnowledgeManifest> {
+    const files = await filesFromZip(source, opts);
+    return decodeJSON<KnowledgeManifest>(requireFile(files, 'manifest.json'));
   }
 
   async dispose(): Promise<void> {
