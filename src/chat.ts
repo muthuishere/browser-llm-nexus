@@ -51,8 +51,21 @@ type ChatEvents = {
 export class NexusChat extends Hooks<ChatEvents> {
   readonly metrics = new Metrics();
   maxRounds = 4;
+  /** Steers the model *toward* calling a tool, before any results exist. */
   systemPrompt =
     'You have access to tools. When a question relates to a tool, you MUST call the tool instead of guessing or inventing data. Answer from tool results.';
+  /** Replaces `systemPrompt` once tool results are in the conversation.
+   *
+   *  These have to be two different instructions. "You MUST call the tool
+   *  instead of guessing" is what makes a small model emit a call in round one
+   *  — and the same sentence, still in context in round two, reads as *the
+   *  tool has not been called yet*, so the model apologises for a failure that
+   *  never happened instead of reading the result sitting right above it.
+   *  Measured on Qwen2.5-0.5B: the call-phase prompt answers "there was an
+   *  error while fetching the weather information" with a perfectly good
+   *  tool_response in context; this one reports the value. */
+  answerPrompt =
+    'You have received tool results. Report them to the user in a sentence. Never invent data.';
   messages: ChatMessage[] = [];
 
   private tools = new Map<string, { schema: ToolSchema; handler: ToolHandler }>();
@@ -141,7 +154,16 @@ export class NexusChat extends Hooks<ChatEvents> {
 
   private async generate(opts: ChatOptions): Promise<string> {
     const tok = this.generator.tokenizer;
-    const prompt: string = tok.apply_chat_template(this.messages, {
+    // Once results are in, swap the call-phase instruction for the answer-phase
+    // one. Only our own injected system message is touched — a system message
+    // the caller wrote themselves is left exactly as they wrote it.
+    const answering = this.messages.some((m) => m.role === 'tool');
+    const messages = answering
+      ? this.messages.map((m) =>
+          m.role === 'system' && m.content === this.systemPrompt ? { ...m, content: this.answerPrompt } : m,
+        )
+      : this.messages;
+    const prompt: string = tok.apply_chat_template(messages, {
       tools: this.tools.size ? this.toolSchemas : undefined,
       tokenize: false,
       add_generation_prompt: true,
