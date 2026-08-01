@@ -106,6 +106,8 @@
       <label><input type="radio" name="kind" value="file" /><span>Archive file</span></label>
     </div>
 
+    <p id="sourceNote" style="color:var(--accent-soft);font-size:13px;margin:10px 0 0"></p>
+
     <div data-for="hub">
       <label for="hub">Repo id</label>
       <input type="text" id="hub" value="onnx-community/Qwen2.5-0.5B-Instruct" list="knownHub" />
@@ -278,6 +280,34 @@ const log = (m) => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e6;
 document.getElementById('sourceKind').addEventListener('change', (e) => {
   for (const el of document.querySelectorAll('[data-for]')) el.hidden = el.dataset.for !== e.target.value;
 });
+
+// ── Prefill from the URL ─────────────────────────────────────────────────────
+// So a converter (hf2browser, a build step, anything) can hand a model straight
+// to this page instead of asking the user to retype where it lives:
+//   ?archive=https://host/model.zip
+//   ?hub=onnx-community/Qwen3-0.6B-ONNX
+//   ?base=http://localhost:8917/models/&id=Qwen/Qwen3-0.6B
+// plus optional &dtype=q4&device=webgpu.
+function applyQuery() {
+  const q = new URLSearchParams(location.search);
+  const pick = (kind) => {
+    const radio = document.querySelector(`input[name=kind][value="${kind}"]`);
+    if (!radio) return;
+    radio.checked = true;
+    for (const el of document.querySelectorAll('[data-for]')) el.hidden = el.dataset.for !== kind;
+  };
+  if (q.has('archive')) { $('url').value = q.get('archive'); pick('url'); }
+  else if (q.has('base')) { $('base').value = q.get('base'); $('baseId').value = q.get('id') || ''; pick('base'); }
+  else if (q.has('hub')) { $('hub').value = q.get('hub'); pick('hub'); }
+  for (const key of ['dtype', 'device']) {
+    const v = q.get(key);
+    if (v && [...$(key).options].some((o) => o.value === v)) $(key).value = v;
+  }
+  if (q.has('name')) {
+    const el = $('sourceNote');
+    if (el) el.textContent = `Prefilled with ${q.get('name')} — press Load.`;
+  }
+}
 
 function readSource() {
   const kind = document.querySelector('input[name=kind]:checked').value;
@@ -555,6 +585,7 @@ for (const el of ['sourceKind', 'hub', 'base', 'baseId', 'url', 'device', 'dtype
   $(el)?.addEventListener('input', refreshSnippet);
   $(el)?.addEventListener('change', refreshSnippet);
 }
+applyQuery();
 refreshSnippet();
 
 // ── Cache: what's stored, and a real delete ──────────────────────────────────
