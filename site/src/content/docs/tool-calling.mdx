@@ -114,7 +114,51 @@ degenerated. Around 0.5B is where tool calling starts working at all.
 you can see the model naming a tool that doesn't exist rather than wondering
 why answers are vague.
 
-### Check your own model
+### Ask the model itself, at runtime
+
+The table above cannot cover a model your user just supplied — an archive they
+uploaded, a folder you serve, something converted this morning. So don't guess:
+run a real tool call and see.
+
+```ts
+const chat = await NexusChat.load({ archive: fileTheUserPicked });
+
+const check = await chat.selfCheck();
+if (!check.ok) {
+  showWarning(check.detail);
+  // "…does not call tools. Try another quantization, or a larger model —
+  //  below ~0.5B this usually cannot be fixed."
+}
+```
+
+It registers a throwaway tool whose result is a token nothing could guess, asks
+for it, and checks whether that token comes back in the answer. Costs about one
+question — trivial next to loading the weights.
+
+```ts
+interface ToolCallCheck {
+  ok: boolean;              // called a tool AND answered from its result
+  called: boolean;          // did it call at all
+  grounded: boolean;        // did the real value reach the answer
+  needed_forcing: boolean;  // only called because the syntax was primed
+  model, device, dtype: string;
+  answer: string;
+  detail: string;           // one sentence, safe to show a user
+}
+```
+
+The three outcomes are genuinely different. `called && !grounded` is the
+dangerous one: the tool ran, and the model reported something else. Answers look
+right and are wrong. `needed_forcing` still passes, but the model is closer to
+the edge than one that volunteers a call.
+
+Your registered tools and conversation history are saved and restored, so this
+is safe to run immediately after `load()`. The `token` / `toolCall` / `raw`
+hooks do fire during the check — the [demo](/browser-llm-nexus/demo/) suppresses
+its diagnostics panel while it runs.
+
+### Check a model from the command line
+
 
 Point it at any model and it tells you which quantization to use — or that the
 model can't do the job:

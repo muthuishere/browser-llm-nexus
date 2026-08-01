@@ -182,3 +182,11 @@ test('stripCallFragments removes call syntax but keeps prose', () => {
   assert.equal(stripCallFragments('[TOOL_CALLS] [{"name":"x"}]'), '');
   assert.equal(stripCallFragments('Plain sentence.'), 'Plain sentence.');
 });
+
+// `'lookup_sensor'.includes('')` is true, so an unextractable name used to
+// "uniquely match" the only registered tool and get dispatched.
+test('salvage: an empty or one-char name never matches a tool', () => {
+  assert.equal(salvageToolCall('<tool_call>\n{"name": "', ['lookup_sensor']), null);
+  assert.equal(salvageToolCall('<tool_call>\n{"name": "still no call', ['lookup_sensor']), null);
+  assert.equal(salvageToolCall('{"name": "g", "arguments": {}}', ['get_weather']), null);
+});

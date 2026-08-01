@@ -608,3 +608,75 @@ test('fragment stripping only applies after tool results exist', async () => {
   const answer = await chat.chat('hi');
   assert.match(answer, /```json/, 'a plain chat answer is not rewritten');
 });
+
+// ── selfCheck: can THIS model actually do it? ───────────────────────────────
+// The published matrix cannot cover a model someone just uploaded from a zip
+// or served from their own host, so the model gets asked directly.
+
+const SENSOR = (args = { id: 'A9' }) => dialect.qwen('lookup_sensor', args);
+
+test('selfCheck passes when the model calls and reports the token', async () => {
+  const { chat } = await chatWith({ script: [SENSOR(), 'The reading is QX-7731.'] });
+  const r = await chat.selfCheck();
+
+  assert.equal(r.ok, true);
+  assert.equal(r.called, true);
+  assert.equal(r.grounded, true);
+  assert.equal(r.needed_forcing, false);
+  assert.match(r.detail, /calls tools correctly/);
+});
+
+test('selfCheck fails loudly when the model never calls', async () => {
+  const { chat } = await chatWith({ script: ['The sensor probably reads about 40.', 'still no call'] });
+  const r = await chat.selfCheck();
+
+  assert.equal(r.ok, false);
+  assert.equal(r.called, false);
+  assert.match(r.detail, /does not call tools/);
+  assert.match(r.detail, /below ~0\.5B/, 'says what to do about it');
+});
+
+// The dangerous case: it calls, then misreports the value. Answers look right.
+test('selfCheck fails when the tool ran but the answer is not grounded', async () => {
+  const { chat } = await chatWith({ script: [SENSOR(), 'The reading is 42.'] });
+  const r = await chat.selfCheck();
+
+  assert.equal(r.called, true);
+  assert.equal(r.grounded, false);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /may look right and be wrong/);
+});
+
+test('selfCheck reports when the call only happened under forcing', async () => {
+  const { chat } = await chatWith({
+    script: ['prose, no call', 'lookup_sensor", "arguments": {"id": "A9"}}', 'The reading is QX-7731.'],
+  });
+  const r = await chat.selfCheck();
+
+  assert.equal(r.ok, true);
+  assert.equal(r.needed_forcing, true);
+  assert.match(r.detail, /only when the call syntax is forced/);
+});
+
+test('selfCheck restores the caller tools and conversation', async () => {
+  const { chat } = await chatWith({ script: ['hello there', SENSOR(), 'The reading is QX-7731.'] });
+  weather(chat);
+  // toolChoice:'none' so this setup turn cannot consume the probe script.
+  await chat.chat('hello', { toolChoice: 'none' });
+  const toolsBefore = chat.toolSchemas.map((s) => s.function.name);
+  const messagesBefore = chat.messages.length;
+
+  await chat.selfCheck();
+
+  assert.deepEqual(chat.toolSchemas.map((s) => s.function.name), toolsBefore, 'tools restored');
+  assert.equal(chat.messages.length, messagesBefore, 'history restored');
+  assert.equal(chat.messages.some((m) => /sensor/i.test(m.content)), false, 'no probe left behind');
+});
+
+test('selfCheck carries the model, device and dtype it tested', async () => {
+  const { chat } = await chatWith({ script: [SENSOR(), 'QX-7731'] });
+  const r = await chat.selfCheck();
+  assert.equal(r.model, 'stub/model');
+  assert.equal(r.device, 'wasm');
+  assert.equal(r.dtype, 'q4');
+});

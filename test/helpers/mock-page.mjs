@@ -46,6 +46,14 @@ export function mockChatClass({ script = ['answer'], device = 'wasm', dtype = 'q
     }
     off(ev, fn) { this.listeners.get(ev)?.delete(fn); }
     emit(ev, ...args) { for (const f of this.listeners.get(ev) ?? []) f(...args); }
+    async selfCheck() {
+      this.selfChecked = true;
+      return state.selfCheck ?? {
+        ok: true, called: true, grounded: true, needed_forcing: false,
+        model: 'stub/model', device, dtype, answer: 'QX-7731',
+        detail: 'stub/model (wasm/q4) calls tools correctly.',
+      };
+    }
     async chat(text) {
       this.asked.push(text);
       return script[Math.min(this.asked.length - 1, script.length - 1)];

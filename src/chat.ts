@@ -41,6 +41,23 @@ export interface ChatOptions {
   toolChoice?: 'auto' | 'required' | 'none';
 }
 
+/** Verdict from {@link NexusChat.selfCheck}. */
+export interface ToolCallCheck {
+  /** Called a tool AND answered from its result. The only value worth gating on. */
+  ok: boolean;
+  called: boolean;
+  grounded: boolean;
+  /** True when the model only called because the library primed the syntax —
+   *  it works, but it is closer to the edge than a model that volunteers. */
+  needed_forcing: boolean;
+  model: string;
+  device: string;
+  dtype: string;
+  answer: string;
+  /** One sentence you can show a user verbatim. */
+  detail: string;
+}
+
 type ChatEvents = {
   token: [string];
   toolCall: [ToolCall, unknown];
@@ -328,6 +345,64 @@ export class NexusChat extends Hooks<ChatEvents> {
     this.messages.push({ role: 'assistant', content: answer });
     this.emit('answer', answer);
     return answer;
+  }
+
+  /** Can THIS model, as loaded, actually call a tool and answer from it?
+   *
+   *  The published matrix cannot cover a model someone just uploaded from a
+   *  zip or served from their own host, so ask the model itself: register a
+   *  throwaway tool whose result is a token nothing could guess, ask for it,
+   *  and see whether the token comes back in the answer. Roughly one
+   *  generation pair — cheap next to loading the weights.
+   *
+   *  Registered tools and conversation history are saved and restored, so this
+   *  is safe to run immediately after load. Note that `token`/`toolCall`/`raw`
+   *  hooks DO fire during the check; ignore them by their round if your UI
+   *  cares.
+   *
+   *    const check = await chat.selfCheck();
+   *    if (!check.ok) warn(check.detail);
+   */
+  async selfCheck(opts: ChatOptions = {}): Promise<ToolCallCheck> {
+    const savedTools = new Map(this.tools);
+    const savedMessages = this.messages;
+    this.tools = new Map();
+    this.messages = [];
+
+    // Unguessable by construction: the only way into the answer is a real call.
+    const TOKEN = 'QX-7731';
+    let called = false;
+    this.tool(
+      'lookup_sensor',
+      'Read the current value of a sensor by its id. Use this for any sensor question.',
+      { id: 'string' },
+      async ({ id }) => {
+        called = true;
+        return { id, reading: TOKEN };
+      },
+    );
+
+    let answer = '';
+    try {
+      answer = await this.chat('What is the reading of sensor A9? Include the reading exactly.', opts);
+    } catch (e) {
+      answer = `error: ${String((e as Error).message ?? e)}`;
+    }
+
+    const forced = (this.metrics.counters.get('tool_calls_forced') ?? 0) > 0;
+    const grounded = answer.includes(TOKEN);
+    this.tools = savedTools;
+    this.messages = savedMessages;
+
+    const ok = called && grounded;
+    const detail = ok
+      ? `${this.modelId} (${this.device}/${this.dtype}) calls tools correctly` +
+        (forced ? ', but only when the call syntax is forced — expect the occasional miss.' : '.')
+      : called
+        ? `${this.modelId} (${this.device}/${this.dtype}) calls tools but does not report the result accurately — answers may look right and be wrong.`
+        : `${this.modelId} (${this.device}/${this.dtype}) does not call tools. Try another quantization, or a larger model — below ~0.5B this usually cannot be fixed.`;
+
+    return { ok, called, grounded, needed_forcing: forced, model: this.modelId, device: this.device, dtype: this.dtype, answer, detail };
   }
 
   reset(): void {

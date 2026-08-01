@@ -54,6 +54,11 @@ export const stripThinking = (t: string): string =>
  *  null when nothing trustworthy can be recovered. */
 export function salvageToolCall(text: string, known: readonly string[]): ToolCall | null {
   const isKnown = (n: string): string | null => {
+    // Guard the empty string first: `anything.includes('')` is true, so an
+    // unextractable name would otherwise "uniquely match" the only registered
+    // tool and get dispatched. That is the same unsafe remapping this function
+    // exists to prevent.
+    if (n.length < 2) return null;
     if (known.includes(n)) return n;
     const lower = known.filter((k) => k.toLowerCase() === n.toLowerCase());
     if (lower.length === 1) return lower[0]!;

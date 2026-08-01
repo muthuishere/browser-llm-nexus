@@ -13,6 +13,7 @@ export {
   type ChatMessage,
   type LoadOptions,
   type ChatOptions,
+  type ToolCallCheck,
 } from './chat.ts';
 
 export { NexusEmbedder, similarity, type EmbedOptions } from './embed.ts';

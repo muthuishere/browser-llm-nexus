@@ -335,3 +335,56 @@ test('the panel resets between questions', async () => {
   await p.settle();
   assert.doesNotMatch(p.$('diag').textContent, /first round text/);
 });
+
+// ── The model self-check, run right after load ──────────────────────────────
+// The published matrix cannot cover a model the user just supplied from a zip
+// or their own host, so the page asks the model itself and shows the verdict.
+
+test('a passing model is reported on the badge and in the log', async () => {
+  const cc = mockChatClass();
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  assert.equal(cc.state.instances[0].selfChecked, true, 'the check actually ran');
+  assert.match(p.$('bCheck').textContent, /tool calling ✓/);
+  assert.match(p.$('log').textContent, /calls tools correctly/);
+});
+
+test('a failing model is called out, with what to do about it', async () => {
+  const cc = mockChatClass();
+  cc.state.selfCheck = {
+    ok: false, called: false, grounded: false, needed_forcing: false,
+    model: 'tiny/model', device: 'wasm', dtype: 'q8', answer: 'about 40',
+    detail: 'tiny/model (wasm/q8) does not call tools.',
+  };
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  assert.match(p.$('bCheck').textContent, /tool calling ✗/);
+  assert.match(p.$('log').textContent, /does not call tools/);
+  assert.match(p.$('log').textContent, /try another Quantization/i);
+});
+
+test('a model that only calls under forcing says so', async () => {
+  const cc = mockChatClass();
+  cc.state.selfCheck = {
+    ok: true, called: true, grounded: true, needed_forcing: true,
+    model: 'm', device: 'wasm', dtype: 'q4', answer: 'QX-7731',
+    detail: 'm (wasm/q4) calls tools correctly, but only when the call syntax is forced.',
+  };
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+
+  assert.match(p.$('bCheck').textContent, /forced/);
+});
+
+test('the self-check does not leave its rounds in the diagnostics panel', async () => {
+  const cc = mockChatClass();
+  const p = await loadPage({ chatClass: cc });
+  p.click('load');
+  await p.settle();
+  assert.doesNotMatch(p.$('diag').textContent, /sensor|QX-7731/);
+});

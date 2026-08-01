@@ -170,6 +170,7 @@
       <span class="badge" id="bDevice">device —</span>
       <span class="badge" id="bDtype">dtype —</span>
       <span class="badge" id="bModel">model —</span>
+      <span class="badge" id="bCheck">tool calling —</span>
     </div>
     <progress id="prog" value="0" max="100" hidden></progress>
     <div id="log"></div>
@@ -440,6 +441,31 @@ $('load').addEventListener('click', async () => {
     for (const id of ['bDevice', 'bDtype', 'bModel']) $(id).classList.add('on');
     log(`✓ ready in ${((performance.now() - t0) / 1000).toFixed(1)}s — ${chat.device} / ${chat.dtype}`);
 
+    // Ask the model itself whether it can do the job. No published table covers
+    // a model someone just loaded from their own zip or host.
+    $('bCheck').textContent = 'tool calling: checking…';
+    checking = true;
+    try {
+      const check = await chat.selfCheck();
+      checking = false;
+      $('bCheck').textContent = check.ok
+        ? `tool calling ✓${check.needed_forcing ? ' (forced)' : ''}`
+        : 'tool calling ✗';
+      $('bCheck').classList.add('on');
+      $('bCheck').style.color = check.ok ? 'var(--ok)' : 'var(--warn)';
+      $('bCheck').style.borderColor = check.ok ? 'var(--ok)' : 'var(--warn)';
+      $('bCheck').title = check.detail;
+      log((check.ok ? '✓ ' : '✗ ') + check.detail);
+      if (!check.ok) {
+        log('  → try another Quantization above, or a bigger model.');
+      }
+      rounds = [];
+      renderDiag();
+    } catch (e) {
+      checking = false;
+      $('bCheck').textContent = 'tool calling: check failed';
+    }
+
     $('q').disabled = $('ask').disabled = false;
     $('chat').innerHTML = '<p class="placeholder">Ready. Ask something a tool has to answer.</p>';
     refreshMetrics();
@@ -463,10 +489,12 @@ $('load').addEventListener('click', async () => {
 
 // ── Diagnostics panel ───────────────────────────────────────────────────────
 let rounds = [];
+let checking = false;   // suppress diagnostics while selfCheck runs
 const diagRound = (n) => (rounds[n] ??= { n, prompt: '', raw: '', calls: null });
 const escHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 function renderDiag() {
+  if (checking) return;
   if (!rounds.length) { $('diag').innerHTML = '<span class="placeholder">Ask something to see the rounds.</span>'; return; }
   $('diag').innerHTML = rounds
     .filter(Boolean)
