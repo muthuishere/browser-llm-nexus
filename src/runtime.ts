@@ -55,10 +55,21 @@ export function preferredDtypeOrder(device: string): readonly string[] {
 export async function detectDtype(tjs: TransformersLike, modelId: string, device = 'wasm'): Promise<string> {
   const base: string | undefined = tjs.env.localModelPath;
   if (!base) throw new Error('cannot probe dtypes without a base URL — pass an explicit dtype');
+  const httpBase = /^https?:\/\//.test(base);
   for (const d of preferredDtypeOrder(device)) {
+    const path = `${base}${base.endsWith('/') ? '' : '/'}${modelId}/onnx/${DTYPE_FILES[d]}`;
     try {
-      const res = await fetch(`${base}${modelId}/onnx/${DTYPE_FILES[d]}`, { method: 'HEAD' });
-      if (res.ok) return d;
+      if (httpBase) {
+        const res = await fetch(path, { method: 'HEAD' });
+        if (res.ok) return d;
+      } else {
+        // Filesystem base (Node): probing over fetch would not work.
+        // Specifier via a variable so bundlers and browser builds ignore it.
+        const nodeFs = 'node:fs/promises';
+        const { stat } = (await import(/* @vite-ignore */ nodeFs)) as { stat: (p: string) => Promise<unknown> };
+        await stat(path);
+        return d;
+      }
     } catch { /* keep probing */ }
   }
   throw new Error(`no dtype variant found for ${modelId} under ${base}`);

@@ -19,8 +19,14 @@ export type ModelSource =
 
 const withSlash = (u: string): string => (u.endsWith('/') ? u : `${u}/`);
 
-const absolute = (u: string): string =>
-  new URL(u, typeof location !== 'undefined' ? location.href : 'file:///').href;
+const inBrowser = (): boolean => typeof location !== 'undefined';
+
+/** In a browser, a base is a URL. Off-browser (Node, tests) a non-URL base is a
+ *  filesystem path and must stay one — Transformers.js reads it with fs. */
+const absolute = (u: string): string => {
+  if (!inBrowser() && !/^https?:\/\//.test(u)) return u;
+  return new URL(u, inBrowser() ? location.href : 'file:///').href;
+};
 
 /** Point the runtime at `source` and return the model id to load. */
 export async function resolveSource(tjs: TransformersLike, source: ModelSource): Promise<string> {
