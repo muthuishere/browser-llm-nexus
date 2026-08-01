@@ -77,8 +77,9 @@
     "url": "git+https://github.com/muthuishere/browser-llm-nexus.git"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.2",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.7.0"
   },
   "peerDependencies": {
     "@huggingface/transformers": ">=3.5.0",
