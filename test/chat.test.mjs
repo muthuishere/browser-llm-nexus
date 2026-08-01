@@ -564,3 +564,47 @@ test('a hallucinated name is never mapped onto the only registered tool', async 
   assert.equal(ran, false, 'the single registered tool was NOT dispatched');
   assert.equal(chat.metrics.counters.get('tool_calls_force_failed'), 1);
 });
+
+// ── The answer phase must return prose, never call syntax ──────────────────
+// Observed live on the deployed demo, WebGPU/q4: round 1 called get_weather
+// correctly and the tool returned "31C, humid, light haze" — then round 2
+// emitted a bare "<tool_call>" which parsed to nothing and was handed to the
+// user AS the answer. The tool worked; the answer was garbage.
+
+test('a dangling tool-call fragment is never returned as the answer', async () => {
+  const { chat, llm } = await chatWith({
+    script: [
+      dialect.qwen('get_weather', { city: 'Chennai' }),
+      '<tool_call>',                        // the live failure, exactly
+      'It is 31C and humid in Chennai.',    // the retry, with tools removed
+    ],
+  });
+  weather(chat);
+
+  const answer = await chat.chat('weather?');
+
+  assert.equal(answer, 'It is 31C and humid in Chennai.');
+  assert.doesNotMatch(answer, /<tool_call>/);
+  assert.equal(chat.metrics.counters.get('answer_retried_without_tools'), 1);
+  // The retry must not show the model the schemas again, or it can loop.
+  assert.equal(llm.rendered[2].tools, undefined, 'retry drops the tool schemas');
+});
+
+test('prose with a trailing call fragment keeps the prose', async () => {
+  const { chat } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.\n<tool_call>\n{"name":'],
+  });
+  weather(chat);
+
+  const answer = await chat.chat('weather?');
+
+  assert.equal(answer, 'It is 31C.');
+  assert.equal(chat.metrics.counters.get('answer_retried_without_tools'), undefined, 'no retry needed');
+});
+
+test('fragment stripping only applies after tool results exist', async () => {
+  // With no tools registered there is no answer phase, so text is untouched.
+  const { chat } = await chatWith({ script: ['Here is some ```json {"a":1}``` inline.'] });
+  const answer = await chat.chat('hi');
+  assert.match(answer, /```json/, 'a plain chat answer is not rewritten');
+});

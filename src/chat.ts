@@ -1,6 +1,6 @@
 import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
-import { parseToolCalls, salvageToolCall, stripThinking, type ToolCall } from './toolcalls.ts';
+import { parseToolCalls, salvageToolCall, stripCallFragments, stripThinking, type ToolCall } from './toolcalls.ts';
 import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
 import { dtypeProbe, resolveSource, type ModelSource } from './source.ts';
 
@@ -187,7 +187,7 @@ export class NexusChat extends Hooks<ChatEvents> {
     return [...this.tools.keys()];
   }
 
-  private async generate(opts: ChatOptions, round = 0, prefix = ''): Promise<string> {
+  private async generate(opts: ChatOptions, round = 0, prefix = '', withTools = true): Promise<string> {
     const tok = this.generator.tokenizer;
     // Once results are in, swap the call-phase instruction for the answer-phase
     // one. Only our own injected system message is touched — a system message
@@ -204,7 +204,7 @@ export class NexusChat extends Hooks<ChatEvents> {
     // than merely being requested.
     const prompt: string =
       tok.apply_chat_template(messages, {
-        tools: this.tools.size ? this.toolSchemas : undefined,
+        tools: withTools && this.tools.size ? this.toolSchemas : undefined,
         tokenize: false,
         add_generation_prompt: true,
         enable_thinking: false,
@@ -289,7 +289,22 @@ export class NexusChat extends Hooks<ChatEvents> {
       // all, and both end the loop the same silent way.
       this.emit('raw', raw, parsed, round);
       if (!calls.length) {
-        const answer = stripThinking(raw);
+        let answer = stripThinking(raw);
+        if (answered()) {
+          // Answer phase. The model still sees the tool schemas and sometimes
+          // opens a call again and stops; that fragment is not an answer.
+          const cleaned = stripCallFragments(answer);
+          if (!cleaned) {
+            // Nothing but call syntax came back. Ask once more with the tools
+            // removed from the template, so prose is the only thing it can
+            // produce. Observed live: the tool ran, and the user was shown the
+            // literal text "<tool_call>".
+            this.metrics.count('answer_retried_without_tools');
+            answer = stripCallFragments(stripThinking(await this.generate(opts, round, '', false)));
+          } else {
+            answer = cleaned;
+          }
+        }
         this.messages.push({ role: 'assistant', content: answer });
         this.emit('answer', answer);
         return answer;

@@ -88,3 +88,18 @@ export function salvageToolCall(text: string, known: readonly string[]): ToolCal
   }
   return { name, arguments: args };
 }
+
+/** Strip tool-call syntax out of text meant to be a human-facing answer.
+ *
+ *  After results are in, a model still sees the tool schemas and the "return a
+ *  json object within <tool_call>" instruction in its template, and small ones
+ *  sometimes open a call again and stop. That fragment parses to nothing, so it
+ *  used to be handed back as the final answer — observed live on the demo:
+ *  the tool ran correctly and the user was shown the literal text
+ *  "<tool_call>". */
+export const stripCallFragments = (t: string): string =>
+  t
+    .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/g, '')
+    .replace(/\[TOOL_CALLS\][\s\S]*$/g, '')
+    .replace(/```(?:json)?[\s\S]*?(?:```|$)/g, '')
+    .trim();

@@ -89,23 +89,35 @@ enough" is how that goes wrong. You get the model's original answer, plus a
 ## Which models actually call tools
 
 Forcing raises the floor; it does not create ability the weights don't have.
-Measured with `npm run test:models` on Qwen2.5-0.5B-Instruct, three questions
-whose answers are unguessable:
+Measured with `npm run test:models` — three questions whose answers are
+unguessable, so a correct reply proves a real call happened:
 
-| dtype | Calls the tool | Answers from the result |
-|---|---|---|
-| **q4** (the default) | 3/3 | **3/3** |
-| `fp16` | 3/3 | 2/3 — misread `1096637` as `109,663,700` |
-| `q8` | 0/3 | 0/3 — even when primed, it invented a tool named `rain` |
+| Model | q4 | q8 | fp16 |
+|---|---|---|---|
+| Qwen2.5-0.5B-Instruct | **3/3 usable** | 0/3 | 2/3 flaky |
+| Qwen3-0.6B-ONNX | 2/3 flaky | **3/3 usable** | 0/3 |
+| SmolLM2-360M-Instruct | 0/3 | 0/3 | 0/3 |
 
-**q8 of a 0.5B is below the floor for tool calling.** No prompt fixes a model
-that cannot pick a name from a list of three. `auto` avoids it — it picks q4 —
-but if you pin `dtype` yourself, pin `q4` at this size.
+Three things worth taking from that table.
 
-Run the matrix against your own model and tools before shipping:
+**The best quantization is model-specific.** Qwen2.5 is reliable at `q4` and
+useless at `q8`; Qwen3 is the exact reverse. There is no ordering that wins
+everywhere, so `auto` picks `q4` first — the best single default, not a
+guarantee — and you should verify your own combination.
+
+**360M is below the floor.** SmolLM2-360M never produced a usable call at any
+quantization; primed with open call syntax it invented tool names and
+degenerated. Around 0.5B is where tool calling starts working at all.
+
+**A failing combination fails loudly, not subtly.** You get
+`tool_calls_force_failed` in metrics and a `forced` event with the raw text, so
+you can see the model naming a tool that doesn't exist rather than wondering
+why answers are vague.
+
+Verify before you ship:
 
 ```bash
-npm run test:models -- --models your-org/your-model --dtypes q4,fp16
+npm run test:models -- --models your-org/your-model --dtypes q4,q8,fp16
 ```
 
 ## Every call format, one parser

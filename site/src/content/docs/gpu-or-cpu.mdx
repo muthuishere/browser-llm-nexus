@@ -53,9 +53,11 @@ tool-calling questions (`npm run test:models` reproduces this):
 | `q8` | 0/3 | 0/3 — narrates *"I would need to use a specific tool"* and never calls |
 
 A faster answer that silently corrupts a tool result is worse than a slower
-correct one, so correctness picks the default. `fp16` is still one explicit
-option away, and a larger model may genuinely prefer it — state it when you
-know:
+correct one, so correctness picks the default. But note this is the best single
+default, not a universal truth — Qwen3-0.6B is the reverse, reliable at `q8`
+and unusable at `fp16`. See [which models actually call
+tools](/browser-llm-nexus/tool-calling/) for the measured matrix, and state the
+dtype yourself once you have verified your own model:
 
 ```ts
 await NexusChat.load(source, { dtype: 'fp16' });

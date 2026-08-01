@@ -1,7 +1,7 @@
 // Tests run against the compiled dist/ (npm test builds first).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseToolCalls, salvageToolCall, stripThinking } from '../dist/toolcalls.js';
+import { parseToolCalls, salvageToolCall, stripCallFragments, stripThinking } from '../dist/toolcalls.js';
 import { MemoryIndex, chunkText } from '../dist/rag.js';
 import { similarity } from '../dist/embed.js';
 import { Metrics } from '../dist/metrics.js';
@@ -173,4 +173,12 @@ test('salvage: malformed arguments degrade to empty, keeping the call', () => {
   const c = salvageToolCall('{"name": "get_weather", "arguments": {city: Chennai}}', KNOWN);
   assert.equal(c.name, 'get_weather');
   assert.deepEqual(c.arguments, {});
+});
+
+test('stripCallFragments removes call syntax but keeps prose', () => {
+  assert.equal(stripCallFragments('<tool_call>'), '');
+  assert.equal(stripCallFragments('<tool_call>\n{"name": "x"}\n</tool_call>'), '');
+  assert.equal(stripCallFragments('It is 31C.\n<tool_call>\n{"name":'), 'It is 31C.');
+  assert.equal(stripCallFragments('[TOOL_CALLS] [{"name":"x"}]'), '');
+  assert.equal(stripCallFragments('Plain sentence.'), 'Plain sentence.');
 });
