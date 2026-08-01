@@ -54,6 +54,9 @@ export interface ModelManifest {
 export interface ExportModelOptions extends ZipOptions {
   /** Where the model is served from. Default '/models/'. */
   modelsUrl?: string;
+  /** Full base URL to fetch files from, overriding `modelsUrl + modelId`.
+   *  Use `hfRoot(repo)` to pack straight from the Hugging Face Hub. */
+  root?: string;
   /** Only include these dtypes (e.g. ['q4']). Default: every variant present. */
   dtypes?: string[];
   /** Extra relative paths to include. */

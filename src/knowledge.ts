@@ -4,6 +4,7 @@ import { NexusChat, type LoadOptions } from './chat.ts';
 import { NexusEmbedder, type EmbedOptions } from './embed.ts';
 import { MemoryIndex, chunkText, indexToFiles, indexFromFiles, type Chunk } from './rag.ts';
 import { exportModel, importModel, type ExportModelOptions } from './model.ts';
+import type { ModelSource } from './source.ts';
 import {
   encodeJSON,
   decodeJSON,
@@ -17,8 +18,11 @@ import {
 } from './archive.ts';
 
 export interface KnowledgeOptions {
-  chat: string | NexusChat;
-  embedder?: string | NexusEmbedder;
+  /** Where the chat model comes from — or an already-loaded NexusChat. */
+  chat: ModelSource | NexusChat;
+  /** Where the embedding model comes from — or an already-loaded embedder.
+   *  Defaults to bge-small on the Hugging Face Hub; state it to use anything else. */
+  embedder?: ModelSource | NexusEmbedder;
   chatOptions?: LoadOptions;
   embedOptions?: EmbedOptions;
   /** Chunking: characters per chunk and overlap. */
@@ -67,7 +71,7 @@ type KnowledgeEvents = {
   answer: [string];
 };
 
-const DEFAULT_EMBEDDER = 'Xenova/bge-small-en-v1.5';
+const DEFAULT_EMBEDDER: ModelSource = { hub: 'Xenova/bge-small-en-v1.5' };
 const RAG_PREFIX = 'rag/';
 const CHAT_MODEL_PREFIX = 'models/chat/';
 const EMBED_MODEL_PREFIX = 'models/embedder/';
@@ -110,18 +114,28 @@ export class NexusKnowledge extends Hooks<KnowledgeEvents> {
   }
 
   static async create(opts: KnowledgeOptions): Promise<NexusKnowledge> {
-    const chatId = typeof opts.chat === 'string' ? opts.chat : '(provided)';
-    const chat =
-      typeof opts.chat === 'string' ? await NexusChat.load(opts.chat, opts.chatOptions) : opts.chat;
+    // Duck-typed, not instanceof: any object with the right shape can stand in
+    // for a loaded model — a test double, a remote proxy, your own runtime.
+    const isLoadedChat = (v: unknown): v is NexusChat =>
+      typeof (v as NexusChat | undefined)?.chat === 'function';
+    const isLoadedEmbedder = (v: unknown): v is NexusEmbedder =>
+      typeof (v as NexusEmbedder | undefined)?.embedBatch === 'function';
+
+    const chat = isLoadedChat(opts.chat)
+      ? opts.chat
+      : await NexusChat.load(opts.chat as ModelSource, opts.chatOptions);
 
     const embedderSpec = opts.embedder ?? DEFAULT_EMBEDDER;
-    const embedderId = typeof embedderSpec === 'string' ? embedderSpec : '(provided)';
-    const embedder =
-      typeof embedderSpec === 'string'
-        ? await NexusEmbedder.load(embedderSpec, opts.embedOptions)
-        : embedderSpec;
+    const embedder = isLoadedEmbedder(embedderSpec)
+      ? embedderSpec
+      : await NexusEmbedder.load(embedderSpec as ModelSource, opts.embedOptions);
 
-    const kb = new NexusKnowledge(chat, embedder, { chat: chatId, embedder: embedderId }, opts);
+    const kb = new NexusKnowledge(
+      chat,
+      embedder,
+      { chat: chat.modelId ?? '(provided)', embedder: embedder.modelId ?? '(provided)' },
+      opts,
+    );
     kb.chat.on('token', (t) => kb.emit('token', t));
     return kb;
   }
@@ -234,14 +248,14 @@ export class NexusKnowledge extends Hooks<KnowledgeEvents> {
     if (manifest.kind !== 'knowledge') throw new Error(`not a knowledge archive (kind=${manifest.kind})`);
 
     const chatZip = files.get(`${CHAT_MODEL_PREFIX}model.zip`);
-    if (chatZip) await importModel(chatZip, { zip: opts.zip });
     const embedZip = files.get(`${EMBED_MODEL_PREFIX}model.zip`);
-    if (embedZip) await importModel(embedZip, { zip: opts.zip });
 
     const kb = await NexusKnowledge.create({
-      chat: opts.chat ?? manifest.models.chat,
-      embedder: opts.embedder ?? manifest.models.embedder,
       ...opts,
+      // Weights (if bundled) are in the cache now, so the recorded ids resolve
+      // from there; callers can still override either source explicitly.
+      chat: opts.chat ?? (chatZip ? { archive: chatZip } : { hub: manifest.models.chat }),
+      embedder: opts.embedder ?? (embedZip ? { archive: embedZip } : { hub: manifest.models.embedder }),
     });
     kb.index = indexFromFiles(stripPrefix(files, RAG_PREFIX));
     for (const d of manifest.docs) kb.docs.set(d.id, { ...d, text: d.text ?? '' });

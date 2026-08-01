@@ -1,46 +1,38 @@
 import { Metrics } from './metrics.ts';
 import { resolveTransformers, detectDevice, type Device, type RuntimeOptions } from './runtime.ts';
-import { importModel } from './model.ts';
-import type { ArchiveSource } from './archive.ts';
+import { resolveSource, type ModelSource } from './source.ts';
 
 export interface EmbedOptions extends RuntimeOptions {
+  /** Quantization variant. Default q8 — a good size/quality point for embedders. */
   dtype?: string;
   /** 'auto' (default) uses WebGPU when available, else WASM/CPU. */
   device?: Device;
   onProgress?: (p: unknown) => void;
-  /** Load from the HF Hub instead of local converted models. */
-  remote?: boolean;
-  /** Load from a model archive (URL, File, Blob or bytes) — restored into the
-   *  browser cache first, so nothing hits the network afterwards. */
-  archive?: ArchiveSource;
 }
 
 /** Embedding model wrapper (feature-extraction) with batching + similarity. */
 export class NexusEmbedder {
   readonly metrics = new Metrics();
 
-  private constructor(private extractor: any, readonly device: string) {}
+  private constructor(private extractor: any, readonly device: string, readonly modelId: string) {}
 
-  /** Load straight from a model archive; the id comes from its manifest. */
-  static async fromArchive(archive: ArchiveSource, opts: Omit<EmbedOptions, 'archive'> = {}): Promise<NexusEmbedder> {
-    const manifest = await importModel(archive, { modelsUrl: opts.modelsUrl });
-    return NexusEmbedder.load(manifest.modelId, opts);
-  }
-
-  static async load(modelId: string, opts: EmbedOptions = {}): Promise<NexusEmbedder> {
-    if (opts.archive) await importModel(opts.archive, { modelsUrl: opts.modelsUrl });
+  /**
+   * Load an embedding model from an explicit source:
+   *
+   *   NexusEmbedder.load({ hub: 'Xenova/bge-small-en-v1.5' })
+   *   NexusEmbedder.load({ base: '/models/', id: 'BAAI/bge-small-en-v1.5' })
+   *   NexusEmbedder.load({ archive: fileFromInput })
+   */
+  static async load(source: ModelSource, opts: EmbedOptions = {}): Promise<NexusEmbedder> {
     const tjs = await resolveTransformers(opts);
-    if (opts.remote) {
-      tjs.env.allowRemoteModels = true;
-      tjs.env.allowLocalModels = false;
-    }
+    const modelId = await resolveSource(tjs, source);
     const device = await detectDevice(opts.device ?? 'auto');
     const extractor = await tjs.pipeline('feature-extraction', modelId, {
       dtype: opts.dtype ?? 'q8',
       device,
       progress_callback: opts.onProgress,
     });
-    return new NexusEmbedder(extractor, device);
+    return new NexusEmbedder(extractor, device, modelId);
   }
 
   /** Embed one text into a normalized vector. */

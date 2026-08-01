@@ -16,6 +16,7 @@ export {
 } from './chat.ts';
 
 export { NexusEmbedder, similarity, type EmbedOptions } from './embed.ts';
+export { resolveSource, describeSource, hubRoot, type ModelSource } from './source.ts';
 
 export {
   MemoryIndex,

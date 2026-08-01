@@ -2,8 +2,7 @@ import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
 import { parseToolCalls, stripThinking, type ToolCall } from './toolcalls.ts';
 import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
-import { importModel } from './model.ts';
-import type { ArchiveSource } from './archive.ts';
+import { resolveSource, type ModelSource } from './source.ts';
 
 export type ToolHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
@@ -23,14 +22,11 @@ export interface ChatMessage {
 }
 
 export interface LoadOptions extends RuntimeOptions {
+  /** Quantization variant. 'auto' probes which variants the source has. */
   dtype?: string | 'auto';
   /** 'auto' (default) uses WebGPU when available, else WASM/CPU. */
   device?: Device;
   onProgress?: (p: unknown) => void;
-  /** Load from a model archive instead of a served folder: a URL, a File from
-   *  an <input type="file">, a Blob, or raw bytes. The archive is restored
-   *  into the browser cache first, so nothing else hits the network. */
-  archive?: ArchiveSource;
 }
 
 export interface ChatOptions {
@@ -66,20 +62,23 @@ export class NexusChat extends Hooks<ChatEvents> {
     readonly dtype: string,
     readonly device: string,
     private tjs: TransformersLike,
+    readonly modelId: string,
   ) {
     super();
   }
 
-  /** Load from a model archive (URL, File, Blob or bytes) without needing the
-   *  model id up front — it comes from the archive's manifest. */
-  static async fromArchive(archive: ArchiveSource, opts: Omit<LoadOptions, 'archive'> = {}): Promise<NexusChat> {
-    const manifest = await importModel(archive, { modelsUrl: opts.modelsUrl });
-    return NexusChat.load(manifest.modelId, opts);
-  }
-
-  static async load(modelId: string, opts: LoadOptions = {}): Promise<NexusChat> {
-    if (opts.archive) await importModel(opts.archive, { modelsUrl: opts.modelsUrl });
+  /**
+   * Load a chat model. The source is always explicit — this library never
+   * guesses a host or a path convention:
+   *
+   *   NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' })   // Hugging Face
+   *   NexusChat.load({ base: '/models/', id: 'Qwen/Qwen3-0.6B' }) // your server
+   *   NexusChat.load({ archive: fileFromInput })                  // a portable zip
+   *   NexusChat.load({ archive: 'https://host/model.zip' })
+   */
+  static async load(source: ModelSource, opts: LoadOptions = {}): Promise<NexusChat> {
     const tjs = await resolveTransformers(opts);
+    const modelId = await resolveSource(tjs, source);
     const device = await detectDevice(opts.device ?? 'auto');
     const dtype = !opts.dtype || opts.dtype === 'auto' ? await detectDtype(tjs, modelId, device) : opts.dtype;
     const t0 = Date.now();
@@ -88,7 +87,7 @@ export class NexusChat extends Hooks<ChatEvents> {
       device,
       progress_callback: opts.onProgress,
     });
-    const chat = new NexusChat(generator, dtype, device, tjs);
+    const chat = new NexusChat(generator, dtype, device, tjs, modelId);
     chat.metrics.time('load', Date.now() - t0);
     return chat;
   }
