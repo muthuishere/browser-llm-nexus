@@ -1,28 +1,67 @@
 {
   "name": "browser-llm-nexus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run LLMs in the browser on plain CPU: tool calling, embeddings, RAG, model bundles, and metrics — one small hooks-style TypeScript library over Transformers.js (injectable).",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./chat": { "types": "./dist/chat.d.ts", "default": "./dist/chat.js" },
-    "./embed": { "types": "./dist/embed.d.ts", "default": "./dist/embed.js" },
-    "./rag": { "types": "./dist/rag.d.ts", "default": "./dist/rag.js" },
-    "./bundle": { "types": "./dist/bundle.d.ts", "default": "./dist/bundle.js" },
-    "./metrics": { "types": "./dist/metrics.d.ts", "default": "./dist/metrics.js" },
-    "./toolcalls": { "types": "./dist/toolcalls.d.ts", "default": "./dist/toolcalls.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "default": "./dist/chat.js"
+    },
+    "./embed": {
+      "types": "./dist/embed.d.ts",
+      "default": "./dist/embed.js"
+    },
+    "./rag": {
+      "types": "./dist/rag.d.ts",
+      "default": "./dist/rag.js"
+    },
+    "./bundle": {
+      "types": "./dist/bundle.d.ts",
+      "default": "./dist/bundle.js"
+    },
+    "./metrics": {
+      "types": "./dist/metrics.d.ts",
+      "default": "./dist/metrics.js"
+    },
+    "./toolcalls": {
+      "types": "./dist/toolcalls.d.ts",
+      "default": "./dist/toolcalls.js"
+    }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --test test/*.test.mjs"
   },
-  "keywords": ["llm", "browser", "wasm", "onnx", "tool-calling", "rag", "embeddings", "transformers.js", "offline", "cpu"],
+  "keywords": [
+    "llm",
+    "browser",
+    "wasm",
+    "onnx",
+    "tool-calling",
+    "rag",
+    "embeddings",
+    "transformers.js",
+    "offline",
+    "cpu"
+  ],
   "author": "Muthukumaran Navaneethakrishnan <muthuishere@gmail.com>",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/muthuishere/hf2browser.git", "directory": "nexus" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muthuishere/hf2browser.git",
+    "directory": "nexus"
+  },
   "devDependencies": {
     "typescript": "^5.7.0"
   },
@@ -30,6 +69,8 @@
     "@huggingface/transformers": ">=3.5.0"
   },
   "peerDependenciesMeta": {
-    "@huggingface/transformers": { "optional": true }
+    "@huggingface/transformers": {
+      "optional": true
+    }
   }
 }
