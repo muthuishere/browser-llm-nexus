@@ -309,6 +309,15 @@ function applyQuery() {
   }
 }
 
+// What the current source points at, as text — used to explain fetch failures.
+function sourceDescription() {
+  const kind = document.querySelector('input[name=kind]:checked').value;
+  if (kind === 'url') return $('url').value;
+  if (kind === 'base') return $('base').value;
+  if (kind === 'hub') return $('hub').value;
+  return 'file';
+}
+
 function readSource() {
   const kind = document.querySelector('input[name=kind]:checked').value;
   if (kind === 'hub') return { hub: $('hub').value.trim() };
@@ -436,7 +445,16 @@ $('load').addEventListener('click', async () => {
     refreshMetrics();
     refreshCache();
   } catch (e) {
-    log('✗ ' + (e?.message ?? e));
+    const msg = String(e?.message ?? e);
+    log('✗ ' + msg);
+    // "Failed to fetch" says nothing. The usual cause here is a hosted page
+    // reaching a converter on the user's own machine, which the browser gates
+    // behind a local-network permission.
+    const loopback = /localhost|127\.0\.0\.1|\[::1\]/.test(sourceDescription());
+    if (/failed to fetch|loopback|private network|network error/i.test(msg) && loopback) {
+      log('  the model is on localhost and this page is not — allow local network access when');
+      log('  your browser asks, or download the .zip and load it with "Archive file" instead.');
+    }
   } finally {
     $('prog').hidden = true;
     $('load').disabled = false;

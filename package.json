@@ -53,7 +53,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:models": "node scripts/model-matrix.mjs"
   },
   "keywords": [
     "webgpu",
@@ -77,6 +78,7 @@
     "url": "git+https://github.com/muthuishere/browser-llm-nexus.git"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "fflate": "^0.8.2",
     "jsdom": "^30.0.1",
     "typescript": "^5.7.0"
