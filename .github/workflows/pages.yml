@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      # The live demo is copied into the site at build time (site prebuild),
+      # so a change to it has to redeploy the site too.
+      - 'examples/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 

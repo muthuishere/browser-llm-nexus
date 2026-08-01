@@ -239,14 +239,19 @@
 <script type="importmap">
 {
   "imports": {
-    "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1"
+    "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
+    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.4.4/dist/index.js"
   }
 }
 </script>
 
 <script type="module">
 import * as transformers from '@huggingface/transformers';
-import { NexusChat, describeSource } from '../dist/index.js';
+// The published package, straight off a CDN — so this page is standalone and
+// the code below is exactly what you would write in your own app.
+// Testing local library changes? Point the import map entry above at
+// '../dist/index.js' and serve the repo root.
+import { NexusChat, describeSource } from 'browser-llm-nexus';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e6; };

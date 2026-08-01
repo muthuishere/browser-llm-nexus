@@ -8,7 +8,9 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "prebuild": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});fs.copyFileSync('../examples/index.html','public/demo/index.html');console.log('copied examples/index.html -> site/public/demo/index.html')\"",
+    "predev": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});fs.copyFileSync('../examples/index.html','public/demo/index.html');console.log('copied examples/index.html -> site/public/demo/index.html')\""
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.3",

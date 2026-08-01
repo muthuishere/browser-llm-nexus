@@ -35,7 +35,10 @@ export default defineConfig({
 			sidebar: [
 				{
 					label: 'Start here',
-					items: [{ label: 'Quickstart', slug: 'quickstart' }],
+					items: [
+						{ label: 'Quickstart', slug: 'quickstart' },
+						{ label: 'Live demo', link: '/browser-llm-nexus/demo/', attrs: { target: '_blank' } },
+					],
 				},
 				{
 					label: 'The differentiators',
