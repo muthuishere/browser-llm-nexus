@@ -680,3 +680,40 @@ test('selfCheck carries the model, device and dtype it tested', async () => {
   assert.equal(r.device, 'wasm');
   assert.equal(r.dtype, 'q4');
 });
+
+// ── Decoding ────────────────────────────────────────────────────────────────
+// Greedy decoding has no escape from a loop: once a phrase is the argmax it
+// stays the argmax. No system prompt fixes that, so the penalty is not optional
+// and must reach EVERY generation — including the forced and answer-phase ones,
+// which are exactly the turns a looping model ruins.
+
+test('every generation carries a repetition penalty', async () => {
+  const { chat, llm } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C in Chennai.'],
+  });
+  weather(chat);
+  await chat.chat('Weather in Chennai?');
+
+  assert.ok(llm.generated.length >= 2, 'more than one generation happened');
+  for (const [i, g] of llm.generated.entries()) {
+    assert.equal(g.opts.repetition_penalty, 1.1, `generation ${i} has the penalty`);
+  }
+});
+
+test('the forced generation carries it too', async () => {
+  const { chat, llm } = await chatWith({
+    script: ['I cannot help with that.', dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'],
+  });
+  weather(chat);
+  await chat.chat('Weather in Chennai?');
+
+  const forced = llm.generated.find((g) => g.prompt.includes('<tool_call>\n{"name": "'));
+  assert.ok(forced, 'a forced turn happened');
+  assert.equal(forced.opts.repetition_penalty, 1.1);
+});
+
+test('repetitionPenalty is overridable, including off', async () => {
+  const { chat, llm } = await chatWith({ script: ['hi'] });
+  await chat.chat('hi', { repetitionPenalty: 1 });
+  assert.equal(llm.generated.at(-1).opts.repetition_penalty, 1);
+});

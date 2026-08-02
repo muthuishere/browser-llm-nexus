@@ -66,8 +66,55 @@ const zip = await exportModel('Qwen/Qwen3-0.6B', {
 
 Hugging Face, your static host, a build step of your own — if it serves the Transformers.js
 file layout, it's a valid `base`. Converting a PyTorch model into that layout is a separate
-job; [hf2browser](https://github.com/muthuishere/hf2browser) is one tool that does it (and
-serves archives in the format above), but **nothing here depends on it**.
+job, and **nothing here depends on any particular tool doing it**.
+
+## Getting a model into that layout: hf2browser
+
+Most models on the Hub ship PyTorch weights, not ONNX. [**hf2browser**](https://github.com/muthuishere/hf2browser)
+is an open-source converter that turns one into the layout above. It is a sister project,
+not a dependency — this library never calls it and never needs to.
+
+```bash
+hf2browser check   Qwen/Qwen3-0.6B                 # tool-calling support, size, task
+hf2browser convert Qwen/Qwen3-0.6B --modes q4,q8,fp16
+hf2browser serve                                    # http://localhost:8917
+```
+
+:::caution[Convert more than one dtype]
+`--modes` defaults to **`q4` alone**, and the pipeline actively *deletes* variants you did
+not ask for. That matters because the best dtype is model-specific and not predictable:
+Qwen2.5-0.5B is usable at q4 and useless at q8; Qwen3-0.6B is the exact reverse. Ship one
+variant and [`detectDtype`](/browser-llm-nexus/gpu-or-cpu/) has nothing to choose between.
+Pass `--modes q4,q8,fp16` and let [`selfCheck()`](/browser-llm-nexus/tool-calling/) decide
+on the user's actual machine.
+
+Cost of the extra modes is size: fp16 is roughly 4× q4, so a 0.5B model goes from ~300 MB
+to ~1 GB for all three.
+:::
+
+### Serve it, or hand it over as a file
+
+`hf2browser serve` gives you both source kinds at once:
+
+```ts
+// Served — a plain base URL, streamed and cached like any other host.
+await NexusChat.load({ base: 'http://localhost:8917/models/', id: 'Qwen/Qwen3-0.6B' });
+
+// Packed — one zip, no server, works offline and off a USB stick.
+await NexusChat.load({ archive: 'http://localhost:8917/api/model.zip?model=Qwen/Qwen3-0.6B&dtype=q4' });
+```
+
+That `/api/model.zip` endpoint emits **exactly** the `manifest.json` + `files/N.bin` layout
+[`importModel()`](/browser-llm-nexus/knowledge/) reads — same `kind` / `modelId` /
+`createdAt` / `dtypes` / `files[{file,url,path}]` shape this library's own `exportModel()`
+writes. Drop the download straight into a `<input type="file">` and `{ archive: file }`
+loads it, with no conversion step in between:
+
+```ts
+input.onchange = () => NexusChat.load({ archive: input.files[0] });
+```
+
+Omit `&dtype=` to pack every variant the conversion produced and let the runtime probe.
 
 ## Injecting the runtime
 

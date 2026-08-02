@@ -1,6 +1,6 @@
 {
   "name": "browser-llm-nexus",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "description": "Run LLMs in the browser — GPU or CPU, same API. Tool calling, embeddings, RAG, offline knowledge bundles, and metrics. Hooks-style TypeScript over Transformers.js (injectable).",
   "type": "module",
   "main": "dist/index.js",

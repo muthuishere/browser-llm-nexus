@@ -39,6 +39,16 @@ export interface ChatOptions {
    *  'required'  — start the call syntax immediately, skipping the free turn.
    *  'none'      — never force; the model answers or it doesn't. */
   toolChoice?: 'auto' | 'required' | 'none';
+  /** Divides the logit of any token already generated, so the next one is less
+   *  likely to be the same. Decoding is greedy, and greedy decoding on a small
+   *  model has no escape from a loop: once a phrase becomes the argmax it stays
+   *  the argmax forever. This is the only thing that breaks that cycle — no
+   *  system prompt can, because the loop is not a comprehension failure.
+   *
+   *  1.1 by default: enough to break loops, mild enough that the structural
+   *  tokens JSON legitimately repeats (`"`, `,`, `:`) still win their positions.
+   *  Set 1 to disable. Above ~1.2 tool-call JSON starts to malform. */
+  repetitionPenalty?: number;
 }
 
 /** Verdict from {@link NexusChat.selfCheck}. */
@@ -241,6 +251,7 @@ export class NexusChat extends Hooks<ChatEvents> {
       this.generator(prompt, {
         max_new_tokens: opts.maxNewTokens ?? 256,
         do_sample: false,
+        repetition_penalty: opts.repetitionPenalty ?? 1.1,
         return_full_text: false,
         streamer,
       }),

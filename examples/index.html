@@ -141,7 +141,11 @@
     <div data-for="file" hidden>
       <label for="file">Archive file (.zip)</label>
       <input type="file" id="file" accept=".zip" />
-      <p class="hint">The air-gap path — a model on a USB stick. Same <code>exportModel()</code> zip, no server at all.</p>
+      <p class="hint">
+        The air-gap path — a model on a USB stick. Same <code>exportModel()</code> zip, no server at all.
+        Don't have one? <a href="https://github.com/muthuishere/hf2browser">hf2browser</a> converts any
+        Hugging Face model and serves it at <code>/api/model.zip</code> in exactly this format.
+      </p>
     </div>
 
     <div class="row" style="margin-top:14px">
@@ -261,7 +265,7 @@
 {
   "imports": {
     "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
-    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.4.9/dist/index.js"
+    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.5.0/dist/index.js"
   }
 }
 </script>
