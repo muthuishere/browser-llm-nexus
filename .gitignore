@@ -2,3 +2,8 @@ node_modules/
 dist/
 .DS_Store
 *.tgz
+
+# Marketing drafts — written here, published from here, never committed.
+# Posts get edited right up to the moment they go out and are not part of the
+# software; a repo full of half-written copy is noise in every diff.
+marketing/
