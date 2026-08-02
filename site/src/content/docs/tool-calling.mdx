@@ -129,6 +129,59 @@ The tradeoff is honest: a rejected candidate was still downloaded. Weights are c
 it is paid once per dtype per browser. If you already know the answer for your model — run
 `npm run test:models` once — pass `dtype` and skip the search.
 
+## When the model can't produce the format
+
+Some models understand the question and cannot emit the syntax. Priming the call fixes many
+of them; for the rest, the library stops asking for JSON altogether and **escalates
+automatically** — you don't configure anything:
+
+1. **Inline** — one generation, the whole call as JSON. What a tool-trained model does natively.
+2. **Primed** — regenerate with `<tool_call>\n{"name": "` already open, so prose is not a
+   possible continuation.
+3. **Stepwise** — ask a closed question to pick the tool, then one question per argument, and
+   assemble the call here.
+
+Stepwise is structurally safer, not just statistically. The tool name is **chosen from your
+registered list**, never written by the model, so a hallucinated name cannot be dispatched.
+And each argument is asked for as a bare value with the value primed (`city = "`), so there
+is no JSON for a small model to malform.
+
+```ts
+await chat.chat(q);                              // auto: escalate only if needed
+await chat.chat(q, { strategy: 'inline' });      // opt out of the extra round trips
+await chat.chat(q, { strategy: 'stepwise' });    // skip inline entirely
+```
+
+Watch it happen — stepwise is many small generations, so a wrong argument is invisible
+without this:
+
+```ts
+chat.on('step', (which, raw, resolved) => console.log(which, resolved, raw));
+// select   get_weather  "The tool needed is get_weather."
+// arg:city get_weather  'Chennai"'
+```
+
+### What it does and does not buy
+
+Measured on real weights, same three questions:
+
+| Model | dtype | inline | with escalation |
+|---|---|---|---|
+| Qwen3-0.6B | q4 | 3/3 called | 3/3 called, **0 rescues, no slower** |
+| Qwen2.5-0.5B | q8 | 1/3 called | **2/3 called**, 2 rescues |
+
+Two honest limits. Escalation costs nothing on a model that never needs it — Qwen3 spent
+zero extra generations. And it fixes **format** failures only: a model that picks the *wrong*
+tool, or ignores a result sitting in its context, is a capability limit that no decomposition
+repairs. Qwen2.5-0.5B at q8 improved at calling and did **not** improve at answering.
+
+:::note[Stepwise is usually not slower]
+It costs 1+N generations instead of 1 — but each is a few tokens instead of up to 256, so
+measured wall-clock came out the same or faster. Concurrency does not help either way: three
+generations on one ONNX session measured a 0.99 ratio against sequential, because a session
+is a single compute stream.
+:::
+
 ## When the model loops instead of answering
 
 Decoding is greedy (`do_sample: false`) — deterministic, which is what you want when the

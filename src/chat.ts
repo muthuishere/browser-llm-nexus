@@ -49,6 +49,25 @@ export interface ChatOptions {
    *  tokens JSON legitimately repeats (`"`, `,`, `:`) still win their positions.
    *  Set 1 to disable. Above ~1.2 tool-call JSON starts to malform. */
   repetitionPenalty?: number;
+  /** How the tool call is extracted from the model.
+   *
+   *  'auto' (default) — inline first, because a model trained on tool calling
+   *  does it in one generation. If that produces no call, and priming the call
+   *  syntax does not either, fall back to stepwise rather than give up. You do
+   *  not have to know which models need this, which is the point: the library
+   *  finds out per question, at no cost to models that never need it.
+   *
+   *  'inline' — one generation produces the whole call as JSON, and if that
+   *  fails, it failed. Use this to opt out of the extra round trips.
+   *
+   *  'stepwise' — skip inline entirely. Ask a closed question to pick the tool,
+   *  then one question per argument, and assemble the call here. The tool name
+   *  is CHOSEN from your list rather than WRITTEN by the model, so a
+   *  hallucinated name cannot be produced, and no step requires emitting valid
+   *  JSON. Measured: Qwen2.5-0.5B at q8 emits {"name": "rain"} inline and
+   *  selects correctly stepwise — and on models that already work it is no
+   *  slower, because 1+N short generations beat one 256-token one. */
+  strategy?: 'auto' | 'inline' | 'stepwise';
 }
 
 /** Verdict from {@link NexusChat.selfCheck}. */
@@ -87,6 +106,11 @@ type ChatEvents = {
    *  turn is invisible — you see "no tool call" and cannot tell whether the
    *  model refused, named something unregistered, or emitted unparseable text. */
   forced: [string, ToolCall | null, number];
+  /** One stepwise question: which step ('select' | 'arg:<name>'), the model's
+   *  raw reply, what it resolved to, and the round. Stepwise is many small
+   *  generations, so without this a wrong argument is invisible — you see a
+   *  bad call and cannot tell which question produced it. */
+  step: [string, string, string | null, number];
 };
 
 /** Tool-calling chat over a converted browser model.
@@ -338,6 +362,132 @@ export class NexusChat extends Hooks<ChatEvents> {
     return prefix + (out[0].generated_text as string);
   }
 
+  /** Ask a one-off closed question in the conversation's context, without
+   *  putting it in the history. Short cap: every stepwise question has a
+   *  one-token-ish answer, and a long budget only gives room to ramble. */
+  private async probe(
+    question: string,
+    maxNewTokens: number,
+    opts: ChatOptions,
+    prefix = '',
+  ): Promise<string> {
+    const messages = [...this.messages, { role: 'user' as const, content: question }];
+    const prompt: string =
+      this.generator.tokenizer.apply_chat_template(messages, {
+        tokenize: false,
+        add_generation_prompt: true,
+        enable_thinking: false,
+      }) + prefix;
+    const out: any = await this.metrics.measure('generate', () =>
+      this.generator(prompt, {
+        max_new_tokens: maxNewTokens,
+        do_sample: false,
+        repetition_penalty: opts.repetitionPenalty ?? 1.1,
+        return_full_text: false,
+      }),
+    );
+    return stripThinking(String(out[0].generated_text)).trim();
+  }
+
+  /** Build a tool call by asking closed questions instead of asking for JSON.
+   *
+   *  Two properties make this hard to get wrong. The tool name is matched
+   *  against the registered list rather than parsed out of free text, so the
+   *  model can pick wrong but cannot invent — and arguments are collected one
+   *  at a time as bare values, so there is no JSON for it to malform. What the
+   *  model is asked to do at each step is roughly "say one word". */
+  private async stepwiseCall(opts: ChatOptions, round: number): Promise<ToolCall | null> {
+    const names = [...this.tools.keys()];
+    const menu = names
+      .map((n) => `- ${n}: ${this.tools.get(n)!.schema.function.description}`)
+      .join('\n');
+
+    const pickedRaw = await this.probe(
+      `Which of these tools is needed to answer my question?\n${menu}\n` +
+        `Reply with exactly one tool name from the list above, or NONE. Nothing else.`,
+      16,
+      opts,
+    );
+    // Matched against the registered list — the model selects, it does not name.
+    const lower = pickedRaw.toLowerCase();
+    const picked =
+      names.find((n) => new RegExp(`\\b${n.toLowerCase()}\\b`).test(lower)) ??
+      names.find((n) => lower.includes(n.toLowerCase()));
+    this.emit('step', 'select', pickedRaw, picked ?? null, round);
+    if (!picked) return null;
+
+    const params = this.tools.get(picked)!.schema.function.parameters;
+    const required = params.required.length ? params.required : Object.keys(params.properties);
+    const args: Record<string, unknown> = {};
+    for (const key of required) {
+      const spec = (params.properties as Record<string, { type?: string; description?: string }>)[key] ?? {};
+      const numeric = spec.type === 'number' || spec.type === 'integer';
+      // Prime the value, exactly as a forced tool call primes the syntax.
+      // Asking politely for "only the value" gets "The city is Chennai." — the
+      // right answer wrapped in a sentence, which then becomes the argument.
+      // Opening the quote leaves the model nowhere to put the sentence.
+      const prefix = numeric ? `${key} = ` : `${key} = "`;
+      const raw = await this.probe(
+        `To use ${picked} I need the value of "${key}"` +
+          (spec.description ? ` (${spec.description})` : '') +
+          `. Based on my question, what is it?`,
+        24,
+        opts,
+        prefix,
+      );
+      let value: unknown;
+      if (numeric) {
+        const n = raw.match(/-?\d[\d,]*\.?\d*/);
+        value = n ? Number(n[0].replace(/,/g, '')) : raw.split('\n')[0]!.trim();
+      } else {
+        // Up to the closing quote the prefix opened; fall back to the first
+        // line with a leading "The <key> is" stripped off.
+        const quoted = raw.match(/^([^"\n]*)"/);
+        value = quoted
+          ? quoted[1]!.trim()
+          : raw
+              .split('\n')[0]!
+              .replace(new RegExp(`^\\s*(the\\s+)?${key}\\s+(is|=|:)\\s*`, 'i'), '')
+              .replace(/^["'\`]|["'\`.]$/g, '')
+              .trim();
+      }
+      if (spec.type === 'boolean') value = /^(true|yes)$/i.test(String(value));
+      args[key] = value;
+      this.emit('step', `arg:${key}`, raw, picked, round);
+    }
+    return { name: picked, arguments: args };
+  }
+
+  /** Run the handlers and put their results in the conversation.
+   *
+   *  Shared by both strategies on purpose: whether the call was parsed out of
+   *  JSON or assembled from closed questions, everything downstream — metrics,
+   *  the toolCall event, the tool message the answer phase reads — must be
+   *  identical, or stepwise would be a second code path that silently drifts.
+   *
+   *  `assistantText` is what the model actually produced; stepwise has no such
+   *  text, so it records the call it built instead of nothing, keeping the
+   *  transcript readable. */
+  private async dispatch(calls: ToolCall[], assistantText: string, _round: number): Promise<void> {
+    this.messages.push({
+      role: 'assistant',
+      content: assistantText || calls.map((c) => `${c.name}(${JSON.stringify(c.arguments)})`).join(' '),
+    });
+    for (const call of calls) {
+      this.metrics.count('tool_calls');
+      let result: unknown;
+      try {
+        result = await this.tools.get(call.name)!.handler((call.arguments as Record<string, unknown>) ?? {});
+        this.metrics.count('tool_calls_ok');
+      } catch (e) {
+        result = { error: String((e as Error).message ?? e) };
+        this.metrics.count('tool_calls_failed');
+      }
+      this.emit('toolCall', call, result);
+      this.messages.push({ role: 'tool', name: call.name, content: JSON.stringify(result) });
+    }
+  }
+
   /** Chat with the automatic tool loop; returns the final grounded answer. */
   async chat(userText: string, opts: ChatOptions = {}): Promise<string> {
     if (this.tools.size && !this.messages.some((m) => m.role === 'system')) {
@@ -354,6 +504,21 @@ export class NexusChat extends Hooks<ChatEvents> {
       // 'required' skips the free turn on the first round; after results exist
       // the model must be free to answer, or the loop could never terminate.
       const forceNow = choice === 'required' && !answered();
+
+      // Stepwise: never ask for JSON. Ask which tool, then each argument, and
+      // build the call here. Only before results exist — once they are in
+      // context the model is answering, not calling.
+      if (opts.strategy === 'stepwise' && this.tools.size && choice !== 'none' && !answered()) {
+        const built = await this.stepwiseCall(opts, round);
+        if (built) {
+          this.metrics.count('tool_calls_stepwise');
+          await this.dispatch([built], '', round);
+          continue;
+        }
+        this.metrics.count('tool_calls_stepwise_declined');
+        // Nothing selected: fall through and let it answer normally.
+      }
+
       let raw = await this.generate(opts, round, forceNow ? this.toolCallPrefix : '');
       let parsed = parseToolCalls(raw);
       let calls = parsed.filter((c) => this.tools.has(c.name));
@@ -385,6 +550,20 @@ export class NexusChat extends Hooks<ChatEvents> {
           this.metrics.count('tool_calls_force_failed');
           const named = forced.match(/"name"\s*:\s*"([^"]{1,40})"/)?.[1];
           if (named) this.emit('metric', `forced_call_named_unknown_tool:${named}`, 1);
+
+          // Last resort before giving up on the call. Inline failed and priming
+          // the syntax failed, which means the model cannot produce the FORMAT
+          // — so stop asking it to. Selecting from a list and naming one value
+          // at a time is a strictly easier task, and the caller should not have
+          // to know in advance which models need it.
+          if ((opts.strategy ?? 'auto') === 'auto') {
+            const built = await this.stepwiseCall(opts, round);
+            if (built) {
+              this.metrics.count('tool_calls_stepwise_rescued');
+              await this.dispatch([built], '', round);
+              continue;
+            }
+          }
         }
       }
 
@@ -413,20 +592,7 @@ export class NexusChat extends Hooks<ChatEvents> {
         this.emit('answer', answer);
         return answer;
       }
-      this.messages.push({ role: 'assistant', content: raw });
-      for (const call of calls) {
-        this.metrics.count('tool_calls');
-        let result: unknown;
-        try {
-          result = await this.tools.get(call.name)!.handler((call.arguments as Record<string, unknown>) ?? {});
-          this.metrics.count('tool_calls_ok');
-        } catch (e) {
-          result = { error: String((e as Error).message ?? e) };
-          this.metrics.count('tool_calls_failed');
-        }
-        this.emit('toolCall', call, result);
-        this.messages.push({ role: 'tool', name: call.name, content: JSON.stringify(result) });
-      }
+      await this.dispatch(calls, raw, round);
     }
     const answer = `tool loop exceeded ${this.maxRounds} rounds`;
     this.messages.push({ role: 'assistant', content: answer });

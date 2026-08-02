@@ -839,3 +839,130 @@ test('the failure does not recommend the model that just failed', async () => {
     );
   } finally { w.restore(); }
 });
+
+// ── Stepwise strategy ───────────────────────────────────────────────────────
+// The point is structural, not statistical: the model SELECTS a tool from the
+// registered list and never WRITES a name, and arguments arrive as bare values
+// so there is no JSON to malform.
+
+test('stepwise builds the call from closed answers, never asking for JSON', async () => {
+  const { chat, llm } = await chatWith({ script: ['get_weather', 'Chennai"', 'It is 31C in Chennai.'] });
+  const spy = {};
+  weather(chat, spy);
+  const answer = await chat.chat('Weather in Chennai?', { strategy: 'stepwise' });
+
+  assert.equal(spy.city, 'Chennai', 'the primed value was extracted, not the sentence');
+  assert.match(answer, /31C/);
+  // No generation ever asked the template for tool schemas.
+  assert.equal(llm.rendered.slice(0, 2).every((r) => !r.tools), true, 'no tool schemas in the step prompts');
+});
+
+test('stepwise cannot dispatch a tool the model invented', async () => {
+  // 'rain' is exactly what Qwen2.5-0.5B at q8 emits when primed inline.
+  const { chat } = await chatWith({ script: ['rain', 'I cannot help with that.'] });
+  const spy = {};
+  weather(chat, spy);
+  await chat.chat('Weather in Chennai?', { strategy: 'stepwise' });
+  assert.equal(spy.city, undefined, 'no handler ran');
+  assert.equal(chat.metrics.counters.get('tool_calls'), undefined);
+  assert.equal(chat.metrics.counters.get('tool_calls_stepwise_declined'), 1);
+});
+
+test('stepwise strips a sentence the model wrapped the value in', async () => {
+  const { chat } = await chatWith({ script: ['get_weather', 'The city is Chennai', 'ok'] });
+  const spy = {};
+  weather(chat, spy);
+  await chat.chat('Weather in Chennai?', { strategy: 'stepwise' });
+  assert.equal(spy.city, 'Chennai', 'leading "The <key> is" removed');
+});
+
+test('stepwise coerces a numeric argument out of prose', async () => {
+  const { chat } = await chatWith({ script: ['add', '4,831', '227', 'The sum is 5058.'] });
+  const got = {};
+  chat.tool('add', 'Add two numbers', { a: 'number', b: 'number' }, async ({ a, b }) => {
+    Object.assign(got, { a, b });
+    return { sum: a + b };
+  });
+  await chat.chat('Add 4831 and 227', { strategy: 'stepwise' });
+  assert.deepEqual(got, { a: 4831, b: 227 }, 'numbers, not strings, commas removed');
+});
+
+test('stepwise selecting NONE falls through to a normal answer', async () => {
+  const { chat } = await chatWith({ script: ['NONE', 'Paris is the capital of France.'] });
+  const spy = {};
+  weather(chat, spy);
+  const answer = await chat.chat('What is the capital of France?', { strategy: 'stepwise' });
+  assert.equal(spy.city, undefined);
+  assert.match(answer, /Paris/);
+});
+
+test('stepwise and inline produce the same downstream transcript', async () => {
+  const inline = await chatWith({ script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'] });
+  weather(inline.chat);
+  await inline.chat.chat('Weather in Chennai?');
+
+  const step = await chatWith({ script: ['get_weather', 'Chennai"', 'It is 31C.'] });
+  weather(step.chat);
+  await step.chat.chat('Weather in Chennai?', { strategy: 'stepwise' });
+
+  const shape = (c) => c.messages.map((m) => m.role);
+  assert.deepEqual(shape(step.chat), shape(inline.chat), 'same message roles in the same order');
+  const toolMsg = (c) => c.messages.find((m) => m.role === 'tool');
+  assert.deepEqual(toolMsg(step.chat).content, toolMsg(inline.chat).content, 'identical tool result message');
+});
+
+test('stepwise primes the value so the model has nowhere to put a sentence', async () => {
+  const { chat, llm } = await chatWith({ script: ['get_weather', 'Chennai"', 'ok'] });
+  weather(chat);
+  await chat.chat('Weather in Chennai?', { strategy: 'stepwise' });
+
+  const argPrompt = llm.generated[1].prompt;
+  assert.ok(argPrompt.endsWith('city = "'), `arg prompt must open the value; ends with ${JSON.stringify(argPrompt.slice(-24))}`);
+});
+
+test('stepwise primes a numeric argument without a quote', async () => {
+  const { chat, llm } = await chatWith({ script: ['add', '4831', '227', 'ok'] });
+  chat.tool('add', 'Add two numbers', { a: 'number', b: 'number' }, async () => ({ sum: 0 }));
+  await chat.chat('Add them', { strategy: 'stepwise' });
+  assert.ok(llm.generated[1].prompt.endsWith('a = '), 'numbers are not quoted');
+});
+
+// ── Automatic escalation ────────────────────────────────────────────────────
+// The caller should not have to know which models need stepwise. Inline first,
+// then primed, then stepwise — and only when the earlier ones actually failed.
+
+test('a model that cannot produce the call format is rescued without being asked', async () => {
+  // 1: refuses. 2: primed, names a tool that does not exist. 3-4: stepwise. 5: answer.
+  const { chat } = await chatWith({
+    script: ['I cannot help with that.', '{"name": "rain", "arguments": {}}', 'get_weather', 'Chennai"', 'It is 31C.'],
+  });
+  const spy = {};
+  weather(chat, spy);
+  const answer = await chat.chat('Weather in Chennai?');
+
+  assert.equal(spy.city, 'Chennai', 'the handler ran after escalation');
+  assert.match(answer, /31C/);
+  assert.equal(chat.metrics.counters.get('tool_calls_force_failed'), 1, 'inline and priming both failed first');
+  assert.equal(chat.metrics.counters.get('tool_calls_stepwise_rescued'), 1);
+});
+
+test('escalation does not fire when inline already worked', async () => {
+  const { chat, llm } = await chatWith({
+    script: [dialect.qwen('get_weather', { city: 'Chennai' }), 'It is 31C.'],
+  });
+  weather(chat);
+  await chat.chat('Weather in Chennai?');
+  assert.equal(chat.metrics.counters.get('tool_calls_stepwise_rescued'), undefined);
+  assert.equal(llm.generated.length, 2, 'no extra round trips were spent');
+});
+
+test("strategy:'inline' opts out of the rescue entirely", async () => {
+  const { chat } = await chatWith({
+    script: ['I cannot help.', '{"name": "rain", "arguments": {}}', 'get_weather', 'Chennai"', 'nope'],
+  });
+  const spy = {};
+  weather(chat, spy);
+  await chat.chat('Weather in Chennai?', { strategy: 'inline' });
+  assert.equal(spy.city, undefined, 'no handler ran');
+  assert.equal(chat.metrics.counters.get('tool_calls_stepwise_rescued'), undefined);
+});
