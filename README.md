@@ -6,9 +6,15 @@
 [![provenance](https://img.shields.io/badge/npm-signed%20provenance-6f42c1?logo=github)](https://www.npmjs.com/package/browser-llm-nexus#provenance)
 [![license](https://img.shields.io/npm/l/browser-llm-nexus)](./LICENSE)
 
-**Run LLMs in the browser — GPU or CPU, same API.** Tool calling, embeddings, RAG,
-offline bundles, and metrics in one small hooks-style TypeScript library over
-[Transformers.js](https://github.com/huggingface/transformers.js).
+**One interface for running models in the browser.** Any ONNX model, from anywhere —
+the Hub, your own host, a zip URL, a file on disk — on WebGPU or CPU, with tool calling,
+embeddings, RAG, offline bundles and metrics. One small hooks-style TypeScript library
+over [Transformers.js](https://github.com/huggingface/transformers.js).
+
+Running a model in a tab means absorbing four kinds of variation at once: where the model
+comes from, which backend the browser has, which quantization actually works, and which
+call syntax the model family speaks. This library absorbs all four so your code doesn't
+change when any of them does.
 
 ```bash
 npm install browser-llm-nexus
@@ -33,7 +39,9 @@ const chat = await NexusChat.load({ archive: 'https://host/model.zip' });
 Every loader picks **WebGPU when the browser has it, WASM/CPU otherwise** — your code
 doesn't change either way. GPU is an accelerator here, never a requirement, so the same
 page works on a workstation and a locked-down laptop. dtype selection follows the
-backend (fp16 first on GPU, q4 first on CPU) among the variants your source actually has.
+backend, among the variants your source actually has — `q4` first on both, because a
+faster answer that silently corrupts a tool result is worse than a slower correct one
+(measured: fp16 read `1096637` back as `109,663,700`).
 
 ```ts
 await NexusChat.load(source);                     // auto: webgpu → wasm
@@ -44,7 +52,9 @@ await NexusChat.load(source, { dtype: 'q4' });    // skip probing
 ## Chat with tool calling
 
 ```ts
-const chat = await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+// loadForTools, not load: it verifies the model can actually call a tool at the
+// quantization it picked, and moves to the next one if it can't.
+const chat = await NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
 
 chat.tool('get_weather', 'Get current weather for a city',
   { city: 'string' },                                        // shorthand JSON schema
@@ -61,6 +71,21 @@ The tool loop is automatic: parse (Qwen/Hermes `<tool_call>`, Mistral `[TOOL_CAL
 Llama bare JSON, fenced JSON) → run your handler → feed the result back → grounded final
 answer. Multi-round, multi-tool, with an anti-hallucination system prompt and
 reasoning-model handling (`enable_thinking: false`, `<think>` stripping).
+
+**A tool call always happens.** If a turn produces none while tools are registered, the
+next generation starts with the call syntax already open, leaving no continuation that
+isn't a call — and the result is kept only if it names a tool you registered. Decoding
+carries a repetition penalty by default, because greedy decoding cannot escape a loop
+on its own and no system prompt can fix that.
+
+Which quantization a model can call tools at is **model-specific and inverted** between
+models (Qwen2.5-0.5B works at `q4` and not `q8`; Qwen3-0.6B is the reverse), so
+`loadForTools()` measures it instead of guessing — or throws naming every dtype it tried:
+
+```ts
+const chat = await NexusChat.loadForTools(source);   // proven, or it throws
+const check = await chat.selfCheck();                // ask any loaded model directly
+```
 
 Dynamic tools from user-written JS (the decorator pattern as a function):
 

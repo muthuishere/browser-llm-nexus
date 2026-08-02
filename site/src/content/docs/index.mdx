@@ -1,9 +1,9 @@
 ---
 title: browser-llm-nexus
-description: Private LLM in any browser. GPU optional. Tool calling, embeddings, RAG and offline knowledge bundles over Transformers.js.
+description: One interface for running LLMs in the browser. Any ONNX model, from the Hub, your own host or a zip — on WebGPU or CPU, with tool calling that is verified rather than assumed.
 template: splash
 hero:
-  tagline: Run an LLM inside the tab — WebGPU when the browser has it, CPU when it doesn't. Same API either way. No server, no bundled weights, nothing leaves the page.
+  tagline: One interface for running models in the browser. Any ONNX model, from anywhere — Hub, your host, a URL, a file on disk. WebGPU when the browser has it, CPU when it doesn't. Your code is the same four lines every time.
   actions:
     - text: Quickstart
       link: /browser-llm-nexus/quickstart/
@@ -12,8 +12,8 @@ hero:
       link: /browser-llm-nexus/demo/
       icon: rocket
       variant: minimal
-    - text: GPU or CPU
-      link: /browser-llm-nexus/gpu-or-cpu/
+    - text: Tool calling
+      link: /browser-llm-nexus/tool-calling/
       icon: right-arrow
       variant: minimal
     - text: GitHub
@@ -24,15 +24,15 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Private LLM in any browser. GPU optional.
+## One interface. The browser is the messy part.
 
-Most "LLM in the browser" projects are a WebGPU demo. A demo excludes the locked-down
-corporate laptop with no GPU adapter — which is exactly the machine where *"the data
-must not leave this page"* actually matters.
+Running a model in a tab means absorbing four kinds of variation at once: **where the model
+comes from**, **which backend the browser has**, **which quantization actually works**, and
+**which call syntax the model family speaks**. Most projects handle one of them and leave
+the other three in your code.
 
-Here, **GPU is an accelerator, never a requirement.** Every loader picks WebGPU when the
-browser exposes a usable adapter and falls back to WASM/CPU otherwise, and your code does
-not change either way.
+This library's job is to absorb all four, so the code you write does not change when any of
+them does.
 
 ```bash
 npm install browser-llm-nexus
@@ -41,7 +41,7 @@ npm install browser-llm-nexus
 ```ts
 import { NexusChat } from 'browser-llm-nexus';
 
-const chat = await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+const chat = await NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
 
 chat.tool('get_weather', 'Get current weather for a city',
   { city: 'string' },
@@ -52,34 +52,69 @@ console.log(await chat.chat('What is the weather in Chennai?'));
 ```
 
 <CardGrid>
-	<Card title="Runs anywhere" icon="laptop">
-		WebGPU → WASM/CPU with no code change. dtype follows the backend — fp16 first on
-		GPU, q4 first on CPU — among the variants your source actually has.
-		[How it works](/browser-llm-nexus/gpu-or-cpu/)
+	<Card title="Any source" icon="seti:folder">
+		The Hub, a folder you serve, a zip URL, or a file the user picked off a USB stick.
+		Four ways to say where a model is; one way to load it. Nothing is guessed — there is
+		no default host and no assumed path.
+		[Model sources](/browser-llm-nexus/model-sources/)
 	</Card>
-	<Card title="Calls your tools" icon="puzzle">
-		Register a function, get a grounded answer. The loop parses Qwen/Hermes, Mistral,
-		Llama and fenced-JSON call formats, runs your handler, and feeds the result back.
+	<Card title="Any backend" icon="laptop">
+		WebGPU when the browser exposes a usable adapter, WASM/CPU when it doesn't, with no
+		code change. GPU is an accelerator here, never a requirement — which matters on the
+		locked-down laptop where *"this must not leave the page"* is the whole point.
+		[GPU or CPU](/browser-llm-nexus/gpu-or-cpu/)
+	</Card>
+	<Card title="Any model family" icon="puzzle">
+		Qwen/Hermes `<tool_call>`, Mistral `[TOOL_CALLS]`, Llama bare JSON, fenced JSON and
+		nested OpenAI-style objects all parse to the same `ToolCall`. Register a plain
+		function; the dialect is not your problem.
 		[Tool calling](/browser-llm-nexus/tool-calling/)
 	</Card>
 	<Card title="Ships offline in a zip" icon="seti:zip">
 		Export a model, a vector index, or a whole knowledge base to a portable archive.
-		Import it on an air-gapped machine — nothing is re-embedded, nothing is downloaded.
+		Import it on an air-gapped machine — nothing re-embedded, nothing downloaded.
 		[Knowledge & bundles](/browser-llm-nexus/knowledge/)
 	</Card>
 </CardGrid>
 
-## Standalone by design
-
-No server of ours. No bundled weights. No assumed layout. Transformers.js is an
-*injectable* peer dependency, and **where a model comes from is always something you
-state** — never guessed.
+## The same four lines, whatever you point it at
 
 ```ts
 await NexusChat.load({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });  // Hugging Face
 await NexusChat.load({ base: '/models/', id: 'Qwen/Qwen3-0.6B' }); // your own host
-await NexusChat.load({ archive: fileTheUserPicked });              // a portable zip
+await NexusChat.load({ archive: 'https://host/model.zip' });       // a portable zip
+await NexusChat.load({ archive: fileTheUserPicked });              // a file on disk
 ```
+
+No server of ours sits behind any of these. No weights are bundled. Transformers.js is an
+*injectable* peer dependency, so you can pin it, patch it, or bundle it offline.
+
+## Verified, not assumed
+
+A common interface is only worth having if what comes out the other side actually works.
+
+Which quantization a model can call tools at is **model-specific and inverted between
+models** — Qwen2.5-0.5B works at `q4` and is useless at `q8`; Qwen3-0.6B is the exact
+reverse. No ordering wins everywhere, so `loadForTools()` stops guessing: it loads a
+candidate, hands it a throwaway tool returning an unguessable token, and keeps the first one
+that both calls the tool and answers from the result.
+
+```ts
+const chat = await NexusChat.loadForTools(source);   // proven, or it throws
+const check = await chat.selfCheck();                // ask any loaded model directly
+```
+
+If nothing works it throws and names every quantization it tried and why. It will not hand
+you a chat object that silently cannot do the job.
+[How that is measured](/browser-llm-nexus/tool-calling/#which-models-actually-call-tools)
+
+## Getting a model into the layout
+
+Most models on the Hub ship PyTorch weights, not ONNX.
+**[hf2browser](https://github.com/muthuishere/hf2browser)** is an open-source converter that
+produces exactly the layout above and hands you the result as a single zip this library
+loads directly. It's a sister project, not a dependency.
+[Converting and serving](/browser-llm-nexus/model-sources/#getting-a-model-into-that-layout-hf2browser)
 
 ## The sister library
 
