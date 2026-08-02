@@ -98,59 +98,67 @@ await chat.evalTools(`
 
 ## What else is out there, and where this differs
 
-Running an LLM in a browser is not a new idea. Four things already do it, and each is a
-better choice than this for some job.
+Running an LLM in a browser is not a new idea, and this is **a set of abstractions built on
+Transformers.js**, not a new inference engine. Checked August 2026 — this area moves, so
+re-check before trusting any of it.
 
-**Chrome's built-in AI (Gemini Nano, the Prompt API)** is the strongest competitor and the
-one to reach for first if it fits: the model ships with the browser, so there is **no
-download at all**, and it's free and fast. The catch is that it's Chrome-only, the model is
-whichever one Google ships, and you cannot swap in your own fine-tune or ship it to an
-air-gapped machine. If you target Chrome and don't need a specific model, use it.
+**Chrome's built-in AI (Gemini Nano, the Prompt API)** — Chrome 138, stable. The model ships
+with the browser, so there is **no download at all**, and it is free and fast. If you target
+Chrome and don't need a specific model, use it. Its docs describe structured output via
+`responseConstraint` (a JSON Schema), but **no tool calling** — constraining a reply's shape
+is not the same as picking a function, filling its arguments, running it, and answering from
+the result. It is also Chrome-only, the model is whichever one Google ships, and you cannot
+substitute your own fine-tune or carry it to an air-gapped machine.
 
-**WebLLM (MLC)** is faster than anything here — it compiles models to WebGPU kernels and
-runs larger models well. It **requires WebGPU**, which means no fallback on the locked-down
-corporate laptop with no GPU adapter, which is exactly the machine where "the data must not
-leave this page" tends to be a hard requirement rather than a preference. Different model
-format and compile toolchain.
+**WebLLM (MLC)** — faster than anything here; it compiles models to WebGPU kernels. It
+**does** have function calling, and it is worth being precise about the state of it: the
+project describes it as beta, limited to **one round** and to the **Hermes-2-Pro** models.
+It also **requires WebGPU**, so there is no fallback on the GPU-less corporate laptop —
+which is exactly the machine where "this data must not leave the page" is a hard requirement
+rather than a preference.
 
-**TensorFlow.js** is a general-purpose in-browser ML runtime and still good at what it was
-built for — vision, audio, classical models. It is not where modern LLM work happens; the
-transformer ecosystem moved to ONNX and MLC.
+**Transformers.js** — this library is built on it. If you want to run a model in a tab and
+nothing more, use it directly: it already does device selection, dtype and the pipeline API.
+You do not need this.
 
-**Transformers.js** is the honest one, because this library is built **on top of it**. If
-you want to run a model in a tab and nothing more, use it directly — it already does device
-selection, dtype, and the pipeline API. You do not need this.
+**TensorFlow.js** — still good for vision, audio and classical models. Not where transformer
+work happens now.
 
 ### So what is actually here
 
-Three things, and none of them is "we run models faster".
+Abstractions over the messy parts, not a faster runtime.
 
-**Tool calling that is verified rather than hoped for.** A tool call from a 0.5B model fails
-in ways an API model never does: it narrates instead of calling, invents a tool name, emits
-malformed JSON, or loops forever. This library forces the call, parses six dialects,
-salvages near-miss JSON, refuses to dispatch a name you didn't register, and — when the
-model simply cannot produce the format — stops asking for JSON and builds the call from
-closed questions instead. That escalation is automatic.
+**A tool loop that survives a small model.** Multi-round and multi-tool, across model
+families rather than one: Qwen/Hermes `<tool_call>`, Mistral `[TOOL_CALLS]`, Llama bare
+JSON, fenced JSON and nested OpenAI-style objects all parse to the same call. It forces a
+call when the model would rather narrate, salvages near-miss JSON, refuses to dispatch a
+name you never registered, and — when a model simply cannot emit the format — stops asking
+for JSON and builds the call from closed questions instead. That escalation is automatic.
 
-**It tells you when it won't work.** `loadForTools()` loads a candidate, gives it a
-throwaway tool returning an unguessable token, and keeps the first quantization that both
-calls the tool and answers from the result — or throws naming every one it tried. Which
-quantization works is model-specific and does not transfer between models, so this is
-measured rather than assumed. [What we measured](https://muthuishere.github.io/browser-llm-nexus/verified-models/),
+**It tells you when it won't work.** `loadForTools()` gives a candidate a throwaway tool
+returning an unguessable token and keeps the first quantization that both calls it and
+answers from the result, or throws naming every one it tried. Which quantization works is
+model-specific and doesn't transfer between models, so it is measured rather than assumed.
+[What we measured](https://muthuishere.github.io/browser-llm-nexus/verified-models/),
 failures included.
 
-**Portability as a first-class artifact.** A model, an embedding model, a vector index, or
-an entire knowledge base exports to one zip and imports on a machine with no network —
-nothing re-embedded, nothing re-downloaded. That is the part that is genuinely hard to
-assemble yourself, and the reason the offline/air-gapped case is the one where there is no
-better alternative to reach for.
+**Embeddings and RAG in the same place.** One engine stack for chat *and* embeddings —
+chunking, a vector index, similarity search and retrieval-grounded answers, with no second
+runtime and no server. Neither Chrome's Prompt API nor WebLLM gives you the retrieval half;
+you would assemble it yourself.
+
+**Export and import as first-class operations.** A chat model, an embedding model, a vector
+index, or an entire knowledge base packs into **one zip** and restores on a machine with no
+network — nothing re-embedded, nothing re-downloaded. This is the part that is genuinely
+hard to assemble yourself, and it is why the offline/air-gapped case is the one where there
+is no better alternative to reach for.
 
 ### Where it is the wrong choice
 
-If you can call an API, call an API — a frontier model is far more capable and your time
+If you can call an API, call an API — a frontier model is far more capable, and your time
 costs more than the tokens. This makes sense when the data cannot leave the machine, when
-there is no network at all, or when per-user inference cost has to be zero. Outside those,
-it is the harder path.
+there is no network at all, or when per-user inference cost has to be zero. Outside those
+three, it is the harder path.
 
 ## Three portable artifacts
 
