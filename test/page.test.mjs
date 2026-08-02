@@ -500,3 +500,14 @@ test('a failed load does not recommend the model that just failed', async () => 
   assert.equal(/Try a bigger model — Qwen3-0\.6B works/.test(p.$('log').textContent), false,
     'must not suggest the model that just failed');
 });
+
+test('the demo loads the cross-origin isolation shim before anything fetches weights', async () => {
+  const p = await loadPage();
+  const html = p.doc.documentElement.outerHTML;
+  const coi = html.indexOf('coi.js');
+  const importmap = html.indexOf('importmap');
+  assert.notEqual(coi, -1, 'coi.js is included');
+  // Order matters: the shim reloads the page to gain isolation. If that happens
+  // after a multi-hundred-MB download starts, the download is wasted.
+  assert.ok(coi < importmap, 'coi.js must come before the module and its imports');
+});

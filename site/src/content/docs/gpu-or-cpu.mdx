@@ -104,16 +104,33 @@ Without them the runtime silently falls back to **one thread** — on any machin
 many cores it has. Nothing errors. It is just several times slower, and it looks like the
 library being slow.
 
-Measured on one Apple-silicon machine, Qwen2.5-0.5B at q4, same weights throughout:
+Measured on one Apple-silicon machine (18 cores), Qwen2.5-0.5B at q4, same weights
+throughout, generating the same prompt:
 
 - **~51 tok/s** — native ONNX Runtime on CPU (Node, threaded)
-- **~1.5 tok/s** — browser WASM, single-threaded, no cross-origin isolation
+- **~14–17 tok/s** — browser **WebGPU**
+- **~4.7 tok/s** — browser WASM **with** threads (cross-origin isolated)
+- **~1.5 tok/s** — browser WASM **without** threads (a plain static host)
 
-:::caution[GitHub Pages cannot send these headers]
-Static hosts that don't let you set response headers — GitHub Pages among them — cannot be
-cross-origin isolated, so their CPU path is stuck single-threaded. **This project's own demo
-is hosted that way**, so its CPU numbers are a floor, not a representative measurement.
-Netlify, Cloudflare Pages, S3+CloudFront and any server you control can all set them.
+Two things in that list are worth pausing on. Cross-origin isolation is worth about **3×**
+on the CPU path and costs two response headers. And for a model this small, **native CPU
+beats browser WebGPU by roughly 3×** — the GPU is not the bottleneck at 0.5B; per-call
+overhead is. Do not assume WebGPU is the fast path until you have measured your model.
+
+:::tip[No headers? A service worker can supply them]
+Static hosts that can't set response headers — GitHub Pages among them — look like a dead
+end. They aren't. A service worker sits between the page and the network and can add COOP
+and COEP to responses on the way back, which is enough for the browser. The page reloads
+once, then reports `crossOriginIsolated === true`.
+
+The demo does exactly this ([`examples/coi.js`](https://github.com/muthuishere/browser-llm-nexus/blob/main/examples/coi.js)),
+and it fully recovers the difference: **4.7 tok/s on a host sending no headers at all**,
+matching a properly-configured server, against 1.5 without it.
+
+Use `Cross-Origin-Embedder-Policy: credentialless`, not `require-corp`. Weights come from a
+CDN or the Hugging Face Hub, and `require-corp` blocks every cross-origin response that
+doesn't carry CORP — which is most of them. `credentialless` keeps them loading by sending
+them without credentials.
 :::
 
 Enabling isolation has a real cost: every cross-origin resource on the page then needs

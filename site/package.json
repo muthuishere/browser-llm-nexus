@@ -9,8 +9,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "prebuild": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});fs.copyFileSync('../examples/index.html','public/demo/index.html');console.log('copied examples/index.html -> site/public/demo/index.html')\"",
-    "predev": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});fs.copyFileSync('../examples/index.html','public/demo/index.html');console.log('copied examples/index.html -> site/public/demo/index.html')\""
+    "prebuild": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});for(const f of ['index.html','coi.js'])fs.copyFileSync('../examples/'+f,'public/demo/'+f);console.log('copied examples/{index.html,coi.js} -> site/public/demo/')\"",
+    "predev": "node -e \"const fs=require('fs');fs.mkdirSync('public/demo',{recursive:true});for(const f of ['index.html','coi.js'])fs.copyFileSync('../examples/'+f,'public/demo/'+f);console.log('copied examples/{index.html,coi.js} -> site/public/demo/')\""
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.3",

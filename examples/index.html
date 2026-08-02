@@ -296,6 +296,11 @@
   </p>
 </aside>
 
+<!-- Cross-origin isolation via a service worker, so the CPU path gets WASM
+     threads even on a host that cannot send COOP/COEP (GitHub Pages). Measured
+     3x on this page's CPU backend. No-op where the host already sends them. -->
+<script src="coi.js"></script>
+
 <script type="importmap">
 {
   "imports": {
