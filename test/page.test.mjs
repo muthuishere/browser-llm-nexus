@@ -1,7 +1,7 @@
 // The example page's wiring, in jsdom with a mock model.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadPage, mockChatClass } from './helpers/mock-page.mjs';
+import { loadPage, mockChatClass, mockKnowledge } from './helpers/mock-page.mjs';
 
 // ── Source picker → ModelSource ─────────────────────────────────────────────
 
@@ -402,4 +402,83 @@ test('the self-check does not leave its rounds in the diagnostics panel', async 
   p.click('load');
   await p.settle();
   assert.doesNotMatch(p.$('diag').textContent, /sensor|QX-7731/);
+});
+
+// ── Documents / RAG panel ───────────────────────────────────────────────────
+// The other half of the library, and it was missing from the page entirely.
+
+test('the documents panel is inert until a model is loaded', async () => {
+  const p = await loadPage();
+  assert.equal(p.$('index').disabled, true, 'cannot index without a chat model');
+  assert.equal(p.$('kask').disabled, true);
+  assert.match(p.$('indexStatus').textContent, /Load a model first/i);
+});
+
+test('loading a model arms the documents panel', async () => {
+  const p = await loadPage();
+  p.click('load');
+  await p.settle();
+  assert.equal(p.$('index').disabled, false);
+  assert.match(p.$('indexStatus').textContent, /Ready/i);
+});
+
+test('indexing splits on blank lines and reports what went in', async () => {
+  const p = await loadPage();
+  p.click('load');
+  await p.settle();
+  p.click('index');
+  await p.settle();
+
+  assert.equal(p.knowledge.docs.length, 4, 'four sample documents, split on blank lines');
+  assert.match(p.$('indexStatus').textContent, /4 documents, 8 chunks/);
+  assert.equal(p.$('kask').disabled, false, 'asking is enabled once indexed');
+  assert.equal(p.$('kexport').disabled, false);
+});
+
+test('asking shows the retrieved passages as well as the answer', async () => {
+  const p = await loadPage();
+  p.click('load');
+  await p.settle();
+  p.click('index');
+  await p.settle();
+  p.click('kask');
+  await p.settle();
+
+  // Retrieval shown alongside the answer on purpose: when an answer is wrong,
+  // "did retrieval fail or did the model ignore it?" is the only useful question.
+  assert.match(p.$('retrieved').textContent, /RX-4182/, 'the passage is visible');
+  assert.match(p.$('kanswer').textContent, /RX-4182/, 'the answer is grounded in it');
+  assert.deepEqual(p.knowledge.asked, ['What is the refund window for standard orders?']);
+});
+
+test('a failed embedder load is reported and leaves the panel usable', async () => {
+  const kn = mockKnowledge();
+  kn.state.failNext = 'embedder';
+  const p = await loadPage({ knowledge: kn });
+  p.click('load');
+  await p.settle();
+  p.click('index');
+  await p.settle();
+
+  assert.match(p.$('indexStatus').textContent, /embedder boom/);
+  assert.equal(p.$('index').disabled, false, 'you can try again');
+  assert.equal(p.$('kask').disabled, true, 'but cannot ask against nothing');
+});
+
+test('clearing the session drops the knowledge base with the model', async () => {
+  const p = await loadPage();
+  p.click('load');
+  await p.settle();
+  p.click('index');
+  await p.settle();
+  assert.equal(p.$('kask').disabled, false);
+
+  p.click('cacheClear');
+  await p.settle();
+
+  // The knowledge base holds a reference to the old chat model; keeping it
+  // alive after a clear would answer using a model the page says is gone.
+  assert.equal(p.window.__nexus.kb, null, 'knowledge base released');
+  assert.equal(p.$('index').disabled, true);
+  assert.equal(p.$('kask').disabled, true);
 });

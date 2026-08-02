@@ -74,8 +74,44 @@ export function mockChatClass({ script = ['answer'], device = 'wasm', dtype = 'q
   return { MockChat, state };
 }
 
+/** Embedder + knowledge stand-ins: record what was indexed, answer from script. */
+export function mockKnowledge({ answer = 'The refund window is RX-4182 days.', retrieved } = {}) {
+  const state = { created: 0, docs: [], asked: [], exported: 0, failNext: null };
+
+  class MockEmbedder {
+    static async load(source, opts) {
+      if (state.failNext === 'embedder') { state.failNext = null; throw new Error('embedder boom'); }
+      const e = new MockEmbedder();
+      e.device = 'wasm';
+      e.modelId = 'stub/embedder';
+      return e;
+    }
+    async embed() { return new Float32Array([1, 0, 0]); }
+    async embedBatch(texts) { return texts.map(() => new Float32Array([1, 0, 0])); }
+  }
+
+  class MockKnowledge {
+    static async create() {
+      state.created++;
+      return new MockKnowledge();
+    }
+    async addDocument(doc) { state.docs.push(doc); return 2; }
+    async retrieve(q) {
+      return retrieved ?? [{ id: 'doc-0#0', text: 'The refund window for standard orders is RX-4182 days.' }];
+    }
+    async ask(q) {
+      state.asked.push(q);
+      if (state.failNext === 'ask') { state.failNext = null; throw new Error('ask boom'); }
+      return answer;
+    }
+    async exportZip() { state.exported++; return new Uint8Array(1024); }
+  }
+
+  return { MockEmbedder, MockKnowledge, state };
+}
+
 /** Boot the page. Returns the window plus handles for driving it. */
-export async function loadPage({ chatClass, caches: cacheSeed = {} } = {}) {
+export async function loadPage({ chatClass, knowledge, caches: cacheSeed = {} } = {}) {
   const html = readFileSync(PAGE, 'utf8');
   const { MockChat, state } = chatClass ?? mockChatClass();
 
@@ -98,6 +134,13 @@ export async function loadPage({ chatClass, caches: cacheSeed = {} } = {}) {
 
   const ctx = vm.createContext(window);
   ctx.NexusChat = MockChat;
+  const kn = knowledge ?? mockKnowledge();
+  ctx.NexusEmbedder = kn.MockEmbedder;
+  ctx.NexusKnowledge = kn.MockKnowledge;
+  // The export button dynamically imports fflate; jsdom has no module loader
+  // for a bare specifier, so hand it a stub that is never actually used to zip.
+  ctx.__mockFflate = {};
+  ctx.URL = window.URL;
   ctx.describeSource = (s) => ('hub' in s ? `hub:${s.hub}` : 'base' in s ? `${s.base}${s.id}` : 'archive:<file>');
   ctx.transformers = {};
   ctx.console = console;
@@ -109,6 +152,7 @@ export async function loadPage({ chatClass, caches: cacheSeed = {} } = {}) {
     window,
     doc: window.document,
     state,
+    knowledge: kn.state,
     $: (id) => window.document.getElementById(id),
     click: (id) => window.document.getElementById(id).dispatchEvent(new window.Event('click')),
     fire: (id, type) => window.document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true })),

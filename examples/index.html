@@ -231,7 +231,36 @@
   </fieldset>
 
   <fieldset>
-    <legend>4 · Use it in your app — copy this</legend>
+    <legend>4 · Your documents — retrieval, offline</legend>
+    <details id="ragWrap">
+      <summary style="cursor:pointer;font-size:13px;color:var(--accent-soft)">
+        Ask questions about text you paste — no server, nothing uploaded
+      </summary>
+      <p class="hint" style="margin:10px 0">
+        The library's other half. A small embedding model (~23&nbsp;MB) indexes what you paste, and
+        the chat model above answers <em>from what was retrieved</em>. Retrieval is markedly more
+        reliable than tool calling at these sizes — measured
+        <a href="https://muthuishere.github.io/browser-llm-nexus/verified-models/">10/10</a>
+        against deliberately near-miss documents.
+      </p>
+      <label for="docs">Documents — separate with a blank line</label>
+      <textarea id="docs" rows="6"></textarea>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:0 0 auto"><button class="ghost" id="index" disabled>Index documents</button></div>
+        <div style="flex:0 0 auto"><button class="ghost" id="kexport" disabled>Export .zip</button></div>
+        <div id="indexStatus" class="hint" style="align-self:center">Load a model first.</div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="kq" value="What is the refund window for standard orders?" disabled />
+        <div style="flex:0 0 auto"><button id="kask" disabled>Ask the documents</button></div>
+      </div>
+      <div id="kanswer" style="margin-top:10px"><p class="placeholder">Index, then ask. The answers are unguessable codes, so a correct reply proves the right passage was retrieved rather than recalled.</p></div>
+      <div id="retrieved" class="diag" style="margin-top:8px"></div>
+    </details>
+  </fieldset>
+
+  <fieldset>
+    <legend>5 · Use it in your app — copy this</legend>
     <p class="hint" style="margin:0 0 8px">
       This is the exact code for what you have selected above. It updates as you change the source,
       the backend, or your tools.
@@ -271,7 +300,8 @@
 {
   "imports": {
     "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
-    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.8.0/dist/index.js"
+    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.8.0/dist/index.js",
+    "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm"
   }
 }
 </script>
@@ -282,7 +312,7 @@ import * as transformers from '@huggingface/transformers';
 // the code below is exactly what you would write in your own app.
 // Testing local library changes? Point the import map entry above at
 // '../dist/index.js' and serve the repo root.
-import { NexusChat, describeSource } from 'browser-llm-nexus';
+import { NexusChat, NexusEmbedder, NexusKnowledge, describeSource } from 'browser-llm-nexus';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e6; };
@@ -482,6 +512,8 @@ $('load').addEventListener('click', async () => {
     }
 
     $('q').disabled = $('ask').disabled = false;
+    ragEnable(true);          // documents can only be indexed once a model exists
+    $('indexStatus').textContent = 'Ready — press Index documents.';
     $('chat').innerHTML = '<p class="placeholder">Ready. Ask something a tool has to answer.</p>';
     refreshMetrics();
     refreshCache();
@@ -705,6 +737,11 @@ $('cacheClear').addEventListener('click', async () => {
     localStorage.removeItem(SAVED);                                       // the saved tools
     $('toolsrc').value = SAMPLE_TOOLS;
     chat = null;
+    kb = null;                // the knowledge base holds the old chat model
+    ragEnable(false);
+    $('indexStatus').textContent = 'Load a model first.';
+    $('kanswer').innerHTML = '<p class="placeholder">Index, then ask.</p>';
+    $('retrieved').innerHTML = '';
     $('q').disabled = $('ask').disabled = true;
     for (const id of ['bDevice', 'bDtype', 'bModel']) $(id).classList.remove('on');
     $('bDevice').textContent = 'device —';
@@ -723,8 +760,89 @@ $('cacheClear').addEventListener('click', async () => {
 
 refreshCache();
 
+// ── Documents: retrieval over text you paste ────────────────────────────────
+// Deliberately separate from the tool loop above. It reuses the SAME loaded
+// chat model and adds only an embedder, which is the point being demonstrated:
+// one runtime does both halves.
+const SAMPLE_DOCS = `Refund policy for standard orders. Refund requests are processed by the billing team once the returned item arrives at the warehouse. The refund window for standard orders is RX-4182 days from delivery.
+
+Refund policy for express orders. Refund requests are processed by the billing team once the returned item arrives. The refund window for express orders is RX-9930 days from delivery.
+
+Backup policy for production. All production databases are backed up on a fixed schedule and encrypted at rest. The backup retention period for production databases is RX-8807 days.
+
+Backup policy for staging. All staging databases are backed up on a fixed schedule and encrypted at rest. The backup retention period for staging databases is RX-3391 days.`;
+
+$('docs').value = SAMPLE_DOCS;
+
+const EMBEDDER = 'Xenova/all-MiniLM-L6-v2';
+let kb = null;
+
+function ragEnable(on) {
+  $('index').disabled = !on;
+  if (!on) { $('kq').disabled = $('kask').disabled = $('kexport').disabled = true; }
+}
+
+$('index').addEventListener('click', async () => {
+  if (!chat) return;
+  $('index').disabled = true;
+  $('indexStatus').textContent = `loading ${EMBEDDER}…`;
+  try {
+    const embedder = await NexusEmbedder.load({ hub: EMBEDDER }, { transformers });
+    kb = await NexusKnowledge.create({ chat, embedder, transformers });
+    // A blank line separates documents — the same convention as the label.
+    const docs = $('docs').value.split(/\n\s*\n/).map((t) => t.trim()).filter(Boolean);
+    let chunks = 0;
+    for (const [i, text] of docs.entries()) chunks += await kb.addDocument({ id: `doc-${i}`, text });
+    $('indexStatus').textContent = `${docs.length} documents, ${chunks} chunks indexed on ${embedder.device}`;
+    $('kq').disabled = $('kask').disabled = $('kexport').disabled = false;
+  } catch (e) {
+    $('indexStatus').innerHTML = `<span style="color:var(--warn)">✗ ${e.message}</span>`;
+  } finally {
+    $('index').disabled = false;
+  }
+});
+
+$('kask').addEventListener('click', async () => {
+  if (!kb) return;
+  const question = $('kq').value.trim();
+  if (!question) return;
+  $('kask').disabled = true;
+  $('kanswer').innerHTML = '<p class="placeholder">retrieving…</p>';
+  $('retrieved').innerHTML = '';
+  try {
+    // Show what was retrieved BEFORE the answer: if the answer is wrong, the
+    // question is always "did retrieval fail, or did the model ignore it?"
+    const hits = await kb.retrieve(question);
+    $('retrieved').innerHTML = hits
+      .map((c, i) => `<div class="rnd"><div class="hd">passage ${i + 1} · ${c.id}</div><pre>${escHtml(c.text)}</pre></div>`)
+      .join('');
+    const answer = await kb.ask(question);
+    $('kanswer').innerHTML = `<div class="msg a"><div class="who">answer</div><div class="body">${escHtml(answer)}</div></div>`;
+  } catch (e) {
+    $('kanswer').innerHTML = `<p style="color:var(--warn)">✗ ${escHtml(e.message)}</p>`;
+  } finally {
+    $('kask').disabled = false;
+  }
+});
+
+$('kexport').addEventListener('click', async () => {
+  if (!kb) return;
+  $('indexStatus').textContent = 'packing…';
+  try {
+    const fflate = await import('fflate');
+    const bytes = await kb.exportZip({ zip: fflate });
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'knowledge.zip'; a.click();
+    URL.revokeObjectURL(url);
+    $('indexStatus').textContent = `knowledge.zip — ${(bytes.length / 1024).toFixed(0)} KB, reimports with nothing re-embedded`;
+  } catch (e) {
+    $('indexStatus').innerHTML = `<span style="color:var(--warn)">✗ ${escHtml(e.message)}</span>`;
+  }
+});
+
 // Expose for scripted checks.
-window.__nexus = { get chat() { return chat; }, ask, applyTools, refreshCache };
+window.__nexus = { get chat() { return chat; }, get kb() { return kb; }, ask, applyTools, refreshCache };
 </script>
 </body>
 </html>
