@@ -299,6 +299,40 @@ export class NexusChat extends Hooks<ChatEvents> {
     return [...this.tools.values()].map((t) => t.schema);
   }
 
+  /** Load a tools file by URL and register everything it defines.
+   *
+   *      await chat.loadTools('./tools.js');
+   *
+   *  The whole point of keeping tools in one plain `.js` file is that it stays
+   *  a file — editable, diffable, servable, swappable at runtime without a
+   *  rebuild. Fetching it and passing the text to {@link evalTools} is three
+   *  lines every caller was going to write identically, including the error
+   *  handling nobody writes: a 404 on a tools file otherwise arrives as
+   *  "tool is not defined" from inside eval, which points at the wrong thing.
+   *
+   *  The file is NOT an ES module — it is a body that calls `tool(...)`, so it
+   *  needs no export and no build step. Pass `fetch` to route it through your
+   *  own loader (auth headers, a bundler's ?raw import, a test double). */
+  async loadTools(url: string | URL, opts: { fetch?: typeof fetch } = {}): Promise<string[]> {
+    const href = String(url);
+    const get = opts.fetch ?? globalThis.fetch;
+    if (typeof get !== 'function') throw new Error('no fetch available — pass { fetch }');
+    let res: Response;
+    try {
+      res = await get(href);
+    } catch (e) {
+      throw new Error(`could not fetch tools file ${href}: ${(e as Error).message}`);
+    }
+    if (!res.ok) throw new Error(`could not fetch tools file ${href}: HTTP ${res.status}`);
+    const code = await res.text();
+    // A missing file often comes back as an HTML 404 page with a 200, and
+    // eval'ing HTML fails somewhere unrecognisable. Say what actually happened.
+    if (/^\s*<(!doctype|html)/i.test(code)) {
+      throw new Error(`${href} returned HTML, not JavaScript — check the path`);
+    }
+    return this.evalTools(code);
+  }
+
   /** Evaluate user-written JS that defines tools via `tool(...)` — the
    *  decorator pattern as a function. Replaces existing tools. */
   async evalTools(code: string): Promise<string[]> {

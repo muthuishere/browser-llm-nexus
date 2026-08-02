@@ -271,7 +271,7 @@
 {
   "imports": {
     "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
-    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.7.0/dist/index.js"
+    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.8.0/dist/index.js"
   }
 }
 </script>
@@ -627,8 +627,9 @@ import { NexusChat } from 'browser-llm-nexus';
 // next quantization if it can't. Throws rather than hand you a dud.
 const chat = await NexusChat.loadForTools(${sourceLiteral()}${optStr});
 
-// your tools — one file, any number of them
-await chat.evalTools(toolsSource);
+// your tools — one plain .js file, any number of them.
+// "Copy tools file only" above gives you its contents; save it as tools.js.
+await chat.loadTools('./tools.js');
 
 chat.on('token', t => render(t));
 chat.on('toolCall', (call, result) => console.log(call.name, result));

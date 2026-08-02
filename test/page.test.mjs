@@ -221,9 +221,22 @@ test('device and dtype appear in the snippet only when overridden', async () => 
   assert.match(p.$('snippet').textContent, /device: 'webgpu'/);
 });
 
-test('the snippet always shows the evalTools line — one file of tools', async () => {
+test('the snippet loads tools from a file, and defines every name it uses', async () => {
   const p = await loadPage();
-  assert.match(p.$('snippet').textContent, /await chat\.evalTools\(toolsSource\)/);
+  const snippet = p.$('snippet').textContent;
+  assert.match(snippet, /await chat\.loadTools\('\.\/tools\.js'\)/);
+  // The bug this replaced: the snippet referenced `toolsSource`, a variable it
+  // never defined, so the code people were told to copy could not run. Check
+  // the CODE lines only — the prose in comments legitimately says "tools".
+  const code = snippet.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  for (const name of ['toolsSource', 'toolsFile']) {
+    assert.equal(new RegExp(`\\b${name}\\b`).test(code), false,
+      `snippet uses undefined identifier "${name}"`);
+  }
+  // Not asserted here: the snippet's own `import` line. mock-page strips every
+  // line starting with `import` to satisfy the module's real imports, which
+  // also eats that line out of the template literal. A harness artefact, not a
+  // page bug — the deployed snippet is checked against the live page instead.
 });
 
 // ── Cache ──────────────────────────────────────────────────────────────────

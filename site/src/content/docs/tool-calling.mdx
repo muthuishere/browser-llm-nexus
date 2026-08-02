@@ -321,10 +321,41 @@ Models with a thinking mode are handled: generation passes `enable_thinking: fal
 the template supports it, and any `<think>…</think>` block that still appears is stripped
 before parsing. You get the answer, not the monologue.
 
+## Tools in one file
+
+Keep every tool in a single plain `.js` file and load it by URL:
+
+```ts
+await chat.loadTools('./tools.js');
+```
+
+```js
+// tools.js — no exports, no build step. `tool` is injected.
+tool('get_weather', 'Get current weather for a city', { city: 'string' },
+  async ({ city }) => (await fetch(`/api/weather?c=${city}`)).json());
+
+tool('get_time', 'Get the current local time in a city', { city: 'string' },
+  async ({ city }) => ({ city, time: new Date().toLocaleTimeString() }));
+```
+
+The file stays a file — editable, diffable, servable, swappable at runtime without a
+rebuild. `loadTools` also reports failures against the *file*: a 404, a network error, or a
+server that returns its HTML error page with status 200 all name the path, instead of
+surfacing as `tool is not defined` from inside an eval, which points at the wrong thing
+entirely.
+
+Pass your own loader when you need auth headers, a bundler's `?raw` import, or a test
+double:
+
+```ts
+await chat.loadTools('/api/tools.js', { fetch: (u) => fetch(u, { headers }) });
+```
+
 ## Tools written at runtime
 
-`evalTools` takes user-written JavaScript and registers whatever it defines — the
-decorator pattern as a function. Useful for letting an app's own users extend the agent:
+`evalTools` is the same thing one level down — it takes JavaScript you already have as a
+string and registers whatever it defines. `loadTools` is a fetch in front of it. Useful for
+letting an app's own users extend the agent:
 
 ```ts
 const names = await chat.evalTools(`

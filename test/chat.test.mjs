@@ -966,3 +966,63 @@ test("strategy:'inline' opts out of the rescue entirely", async () => {
   assert.equal(spy.city, undefined, 'no handler ran');
   assert.equal(chat.metrics.counters.get('tool_calls_stepwise_rescued'), undefined);
 });
+
+// ── loadTools ───────────────────────────────────────────────────────────────
+// Tools live in one plain .js file. Fetching it is three lines every caller
+// would write identically, and the error handling is the part they wouldn't.
+
+const toolsFile = `
+tool('get_weather', 'Weather for a city', { city: 'string' },
+  async ({ city }) => ({ city, conditions: '31C' }));
+tool('get_time', 'Time in a city', { city: 'string' },
+  async ({ city }) => ({ city, time: '09:00' }));
+`;
+
+test('loadTools fetches a file and registers everything in it', async () => {
+  const { chat } = await chatWith();
+  const names = await chat.loadTools('./tools.js', {
+    fetch: async (url) => {
+      assert.equal(url, './tools.js');
+      return new Response(toolsFile, { status: 200 });
+    },
+  });
+  assert.deepEqual(names, ['get_weather', 'get_time']);
+  assert.deepEqual(chat.toolSchemas.map((s) => s.function.name), ['get_weather', 'get_time']);
+});
+
+test('a missing tools file names the file, not something from inside eval', async () => {
+  const { chat } = await chatWith();
+  await assert.rejects(
+    chat.loadTools('./nope.js', { fetch: async () => new Response('', { status: 404 }) }),
+    (e) => /nope\.js/.test(e.message) && /404/.test(e.message),
+  );
+});
+
+test('an HTML 404 page served as 200 is caught before it reaches eval', async () => {
+  // The nastiest version: the server returns its 404 page with status 200, so
+  // the code eval'd is HTML and the error comes from a parser, pointing nowhere.
+  const { chat } = await chatWith();
+  await assert.rejects(
+    chat.loadTools('./tools.js', {
+      fetch: async () => new Response('<!doctype html><html><body>Not found</body></html>', { status: 200 }),
+    }),
+    /returned HTML, not JavaScript/,
+  );
+});
+
+test('a network failure says which file could not be fetched', async () => {
+  const { chat } = await chatWith();
+  await assert.rejects(
+    chat.loadTools('https://host/tools.js', { fetch: async () => { throw new Error('offline'); } }),
+    (e) => /https:\/\/host\/tools\.js/.test(e.message) && /offline/.test(e.message),
+  );
+});
+
+test('loadTools replaces the previous tool set, like evalTools', async () => {
+  const { chat } = await chatWith();
+  weather(chat);
+  await chat.loadTools('./t.js', {
+    fetch: async () => new Response(`tool('only_this', 'x', {}, async () => 1);`, { status: 200 }),
+  });
+  assert.deepEqual(chat.toolSchemas.map((s) => s.function.name), ['only_this']);
+});
