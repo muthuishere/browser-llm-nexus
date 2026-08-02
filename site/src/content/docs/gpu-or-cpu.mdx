@@ -84,6 +84,46 @@ await NexusChat.load(source, { dtype: 'q4' });
 Probing needs a base URL to probe against. If you hit
 `cannot probe dtypes without a base URL`, pass an explicit `dtype`.
 
+## The CPU number nobody tells you about
+
+If CPU inference feels far slower than it should, check this before blaming the model:
+
+```js
+console.log(self.crossOriginIsolated);   // false = single-threaded WASM
+```
+
+`onnxruntime-web` uses WASM threads, which need `SharedArrayBuffer`, which browsers only
+expose on a **cross-origin isolated** page. That requires two response headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without them the runtime silently falls back to **one thread** — on any machine, however
+many cores it has. Nothing errors. It is just several times slower, and it looks like the
+library being slow.
+
+Measured on one Apple-silicon machine, Qwen2.5-0.5B at q4, same weights throughout:
+
+- **~51 tok/s** — native ONNX Runtime on CPU (Node, threaded)
+- **~1.5 tok/s** — browser WASM, single-threaded, no cross-origin isolation
+
+:::caution[GitHub Pages cannot send these headers]
+Static hosts that don't let you set response headers — GitHub Pages among them — cannot be
+cross-origin isolated, so their CPU path is stuck single-threaded. **This project's own demo
+is hosted that way**, so its CPU numbers are a floor, not a representative measurement.
+Netlify, Cloudflare Pages, S3+CloudFront and any server you control can all set them.
+:::
+
+Enabling isolation has a real cost: every cross-origin resource on the page then needs
+`Cross-Origin-Resource-Policy` or CORP-enabled CORS, which can break third-party embeds.
+That trade is why it isn't the default anywhere.
+
+WebGPU is unaffected — it doesn't use WASM threads — which is one reason the GPU path can
+look dramatically better on a hosted page than the CPU path, even where the hardware gap is
+much smaller.
+
 ## What this buys you
 
 - One build, one code path, every machine — no "unsupported browser" branch.
