@@ -529,7 +529,12 @@ $('load').addEventListener('click', async () => {
       $('bCheck').classList.add('on');
       $('bCheck').style.color = 'var(--warn)';
       $('bCheck').style.borderColor = 'var(--warn)';
-      log('  → no quantization of this model can call tools. Try a bigger model — Qwen3-0.6B works.');
+      // Suggesting the model that just failed reads as a bug, and it fired for
+      // real: loading Qwen3-0.6B and failing printed "try Qwen3-0.6B".
+      const suggestion = /Qwen3-0\.6B/i.test(sourceDescription())
+        ? 'Try another quantization above, or a different model.'
+        : 'Try a bigger model — Qwen3-0.6B works.';
+      log('  → no quantization of this model can call tools. ' + suggestion);
     }
     // "Failed to fetch" says nothing. The usual cause here is a hosted page
     // reaching a converter on the user's own machine, which the browser gates

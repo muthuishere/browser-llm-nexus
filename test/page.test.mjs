@@ -482,3 +482,21 @@ test('clearing the session drops the knowledge base with the model', async () =>
   assert.equal(p.$('index').disabled, true);
   assert.equal(p.$('kask').disabled, true);
 });
+
+test('a failed load does not recommend the model that just failed', async () => {
+  // Seen live: loading Qwen3-0.6B, failing, and being told "try Qwen3-0.6B".
+  const cc = mockChatClass();
+  cc.state.selfCheck = {
+    ok: false, called: false, grounded: false, needed_forcing: false,
+    model: 'onnx-community/Qwen3-0.6B-ONNX', device: 'wasm', dtype: 'q4', answer: '',
+    detail: 'onnx-community/Qwen3-0.6B-ONNX (wasm/q4) does not call tools.',
+  };
+  const p = await loadPage({ chatClass: cc });
+  p.$('hub').value = 'onnx-community/Qwen3-0.6B-ONNX';
+  p.click('load');
+  await p.settle();
+
+  assert.match(p.$('log').textContent, /no quantization of this model can call tools/);
+  assert.equal(/Try a bigger model — Qwen3-0\.6B works/.test(p.$('log').textContent), false,
+    'must not suggest the model that just failed');
+});
