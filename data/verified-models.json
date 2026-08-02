@@ -1,6 +1,6 @@
 {
   "$comment": "Measured, not curated. Every row here was produced by `npm run test:models` against real weights on CPU — three questions whose answers are unguessable tokens, so a correct reply proves a real tool call happened. A model absent from this file is UNTESTED, which is not the same as bad. Consumed by the demo's model picker, the docs table, and hf2browser's search results, so the three cannot drift apart. `listable` marks models a picker may OFFER; the rest stay here as measured evidence only — a menu should never hand someone a model we know fails.",
-  "harness": "scripts/model-matrix.mjs",
+  "harness": "scripts/model-matrix.mjs (tools), scripts/rag-matrix.mjs (retrieval)",
   "library": "0.7.0",
   "measuredOn": "2026-08-02",
   "device": "cpu",
@@ -87,5 +87,48 @@
     "not-for-tools": "Runs, but cannot reliably pick a tool name from a list. Fine for plain generation or as an embedding-adjacent model; do not build a tool loop on it.",
     "untested": "Not measured by us. It may work perfectly — run chat.selfCheck() and find out on your own machine."
   },
-  "floor": "Tool calling starts working around 0.5B. Below that, a model primed with open call syntax invents tool names rather than choosing one."
+  "floor": "Tool calling starts working around 0.5B. Below that, a model primed with open call syntax invents tool names rather than choosing one.",
+  "retrieval": {
+    "$comment": "Measured by `npm run test:rag` against a corpus built with near-miss distractors: every question's key phrase appears in TWO documents and only a qualifier (standard/express, production/staging, severity one/two) picks the right one, so lexical overlap alone cannot answer them. Answers are unguessable RX-#### tokens. Verified discriminating: substituting random vectors drops recall@1 from 10/10 to 1/10.",
+    "questions": 10,
+    "corpus": "10 documents in 5 adversarial pairs",
+    "embedders": [
+      {
+        "id": "Xenova/all-MiniLM-L6-v2",
+        "dtype": "q8",
+        "recallAt1": 1.0,
+        "recallAt5": 1.0,
+        "mrr": 1.0,
+        "margin": 0.106,
+        "verdict": "recommended",
+        "note": "Largest separation from the near-miss distractor."
+      },
+      {
+        "id": "Xenova/bge-small-en-v1.5",
+        "dtype": "q8",
+        "recallAt1": 1.0,
+        "recallAt5": 1.0,
+        "mrr": 1.0,
+        "margin": 0.084,
+        "verdict": "usable"
+      },
+      {
+        "id": "Xenova/gte-small",
+        "dtype": "q8",
+        "recallAt1": 1.0,
+        "recallAt5": 1.0,
+        "mrr": 1.0,
+        "margin": 0.038,
+        "verdict": "usable",
+        "note": "Correct every time, but only 0.038 ahead of the wrong look-alike — the thinnest margin measured."
+      }
+    ],
+    "endToEnd": {
+      "embedder": "Xenova/all-MiniLM-L6-v2 q8",
+      "chat": "onnx-community/Qwen3-0.6B-ONNX q4",
+      "groundedAnswers": "10/10",
+      "knowledgeZipKB": 31,
+      "reimportRetrievalIdentical": true
+    }
+  }
 }

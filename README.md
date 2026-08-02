@@ -142,14 +142,29 @@ model-specific and doesn't transfer between models, so it is measured rather tha
 [What we measured](https://muthuishere.github.io/browser-llm-nexus/verified-models/),
 failures included.
 
-**Embeddings and RAG in the same place.** One engine stack for chat *and* embeddings —
-chunking, a vector index, similarity search and retrieval-grounded answers, with no second
-runtime and no server. Neither Chrome's Prompt API nor WebLLM gives you the retrieval half;
-you would assemble it yourself.
+**Embeddings and RAG in the same place — measured, not asserted.** One engine stack for
+chat *and* embeddings: chunking, a vector index, similarity search and retrieval-grounded
+answers, with no second runtime and no server. Neither Chrome's Prompt API nor WebLLM gives
+you the retrieval half; you would assemble it yourself.
+
+`npm run test:rag` scores it on a corpus built to be hard — every question's key phrase
+appears in **two** documents and only a qualifier (standard/express, production/staging,
+severity one/two) picks the right one, so lexical overlap alone can't answer it. Three
+embedding models retrieve the right document first on **10/10** questions; end to end,
+all-MiniLM-L6-v2 plus Qwen3-0.6B gave **10/10 grounded answers**. The harness is checked
+against itself: random vectors drop recall@1 to 1/10, so the score isn't an artefact of an
+easy corpus. [Full results](https://muthuishere.github.io/browser-llm-nexus/verified-models/).
+
+Worth knowing: **retrieval is far more reliable than tool calling at these model sizes.**
+Restating a retrieved paragraph is much easier than choosing a function and emitting valid
+JSON — which is why an offline knowledge system suits a small in-browser model better than
+an agent does.
 
 **Export and import as first-class operations.** A chat model, an embedding model, a vector
 index, or an entire knowledge base packs into **one zip** and restores on a machine with no
-network — nothing re-embedded, nothing re-downloaded. This is the part that is genuinely
+network — nothing re-embedded, nothing re-downloaded. Measured rather than assumed: the
+corpus above exported to a **31 KB** knowledge zip and returned **identical retrieval** after
+reimport, and the harness fails the run if it doesn't. This is the part that is genuinely
 hard to assemble yourself, and it is why the offline/air-gapped case is the one where there
 is no better alternative to reach for.
 

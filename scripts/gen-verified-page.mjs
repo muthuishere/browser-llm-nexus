@@ -5,12 +5,18 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const d = JSON.parse(readFileSync(new URL('../data/verified-models.json', import.meta.url), 'utf8'));
+const r = d.retrieval;
 // Data becomes MDX, and MDX reads { } as a JSX expression and < as a tag. A
 // measured note like {"name": "rain"} is ordinary prose here and a syntax
 // error there, so escape at the boundary rather than sanitising the data.
 const mdx = (t) => String(t).replace(/[{}<>]/g, (c) => `\\${c}`);
 const MARK = { usable: '✅ usable', flaky: '⚠️ flaky', poor: '⚠️ poor', broken: '❌ broken', unusable: '❌ 0/3' };
 const dt = ['q4', 'q8', 'fp16'];
+
+const embedderList = r.embedders
+  .map((e) => `- **${e.id}** @ ${e.dtype} — recall@1 **${e.recallAt1 * 100}%**, margin ${e.margin}` +
+              (e.note ? ` — ${mdx(e.note)}` : ''))
+  .join('\n');
 
 const rows = d.models.map((m) => {
   const cells = dt.map((k) => {
@@ -44,6 +50,36 @@ Measured **${d.measuredOn}** on **${d.device}**, library **${d.library}**.
 ${rows}
 
 ${notes ? `### Why the marked ones fail\n\n${notes}\n` : ''}
+## Retrieval — which embedding models find the right chunk
+
+\`npm run test:rag\` measures the other half: given a question, does the **right document**
+come back? The corpus is built to be hard — every question's key phrase appears in **two**
+documents and only a qualifier (standard/express, production/staging, severity one/two)
+picks the right one, so lexical overlap alone cannot answer it. Answers are unguessable
+tokens, and the harness is checked against itself: swapping in random vectors drops
+recall@1 from 10/10 to 1/10, so a good score is not an artefact of an easy corpus.
+
+${embedderList}
+
+**Margin is the number to read, not recall.** All three retrieve correctly on every
+question; what separates them is how far ahead the right document scores over the
+near-miss. ${r.embedders[0].id} leads by ${r.embedders[0].margin}, ${r.embedders.at(-1).id}
+by only ${r.embedders.at(-1).margin} — correct today, and much closer to a coin flip on a
+corpus slightly harder than this one.
+
+### End to end
+
+With **${r.endToEnd.embedder}** retrieving and **${r.endToEnd.chat}** answering:
+**${r.endToEnd.groundedAnswers} grounded answers** — the reply contained the unguessable
+token from the correct document, so retrieval and generation both did their job. The whole
+knowledge base exported to a **${r.endToEnd.knowledgeZipKB} KB zip** and, after reimport,
+returned identical retrieval${r.endToEnd.reimportRetrievalIdentical ? '' : ' — MISMATCH'}.
+
+Note the contrast with tool calling above: retrieval is **far** more reliable at these model
+sizes. Summarising a retrieved paragraph is a much easier task than choosing a function and
+emitting valid JSON, which is why an offline knowledge system is a better fit for a small
+in-browser model than an agent is.
+
 ## Reading this table
 
 **Only models we measured appear here.** Anything else is untested rather than bad —

@@ -55,6 +55,7 @@
     "build": "tsc",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:models": "node scripts/model-matrix.mjs",
+    "test:rag": "node scripts/rag-matrix.mjs",
     "docs:verified": "node scripts/gen-verified-page.mjs"
   },
   "keywords": [
