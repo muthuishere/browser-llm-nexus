@@ -45,6 +45,7 @@ export default defineConfig({
 					items: [
 						{ label: 'GPU or CPU — same API', slug: 'gpu-or-cpu' },
 						{ label: 'Tool calling', slug: 'tool-calling' },
+						{ label: 'Which models actually work', slug: 'verified-models' },
 						{ label: 'Knowledge & offline bundles', slug: 'knowledge' },
 					],
 				},

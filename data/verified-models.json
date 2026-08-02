@@ -1,0 +1,91 @@
+{
+  "$comment": "Measured, not curated. Every row here was produced by `npm run test:models` against real weights on CPU — three questions whose answers are unguessable tokens, so a correct reply proves a real tool call happened. A model absent from this file is UNTESTED, which is not the same as bad. Consumed by the demo's model picker, the docs table, and hf2browser's search results, so the three cannot drift apart. `listable` marks models a picker may OFFER; the rest stay here as measured evidence only — a menu should never hand someone a model we know fails.",
+  "harness": "scripts/model-matrix.mjs",
+  "library": "0.7.0",
+  "measuredOn": "2026-08-02",
+  "device": "cpu",
+  "questions": 3,
+  "models": [
+    {
+      "id": "onnx-community/Qwen3-0.6B-ONNX",
+      "params": "0.6B",
+      "verdict": "recommended",
+      "label": "best tested — calls tools at two quantizations",
+      "dtypes": {
+        "q4": {
+          "called": 3,
+          "grounded": 3,
+          "verdict": "usable"
+        },
+        "q8": {
+          "called": 3,
+          "grounded": 3,
+          "verdict": "usable"
+        },
+        "fp16": {
+          "called": 0,
+          "grounded": 0,
+          "verdict": "broken",
+          "note": "Transformers.js throws 'Tensor.data must be a typed array (4) for float16 tensors' on this model — a runtime defect, not a model one."
+        }
+      },
+      "listable": true
+    },
+    {
+      "id": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "params": "0.5B",
+      "verdict": "recommended",
+      "label": "smallest that works — q4 only",
+      "dtypes": {
+        "q4": {
+          "called": 3,
+          "grounded": 3,
+          "verdict": "usable"
+        },
+        "q8": {
+          "called": 2,
+          "grounded": 1,
+          "verdict": "poor",
+          "note": "Inline it emits {\"name\": \"rain\"} — a tool that does not exist. Stepwise escalation gets it calling 2/3, but it still answers from its own guess instead of the tool result."
+        },
+        "fp16": {
+          "called": 3,
+          "grounded": 2,
+          "verdict": "flaky",
+          "note": "Read a tool result of 1096637 back as 109,663,700."
+        }
+      },
+      "listable": true
+    },
+    {
+      "id": "HuggingFaceTB/SmolLM2-360M-Instruct",
+      "params": "0.36B",
+      "verdict": "not-for-tools",
+      "label": "too small for tool calling — 0/3 at every quantization",
+      "dtypes": {
+        "q4": {
+          "called": 0,
+          "grounded": 0,
+          "verdict": "unusable"
+        },
+        "q8": {
+          "called": 0,
+          "grounded": 0,
+          "verdict": "unusable"
+        },
+        "fp16": {
+          "called": 0,
+          "grounded": 0,
+          "verdict": "unusable"
+        }
+      },
+      "listable": false
+    }
+  ],
+  "verdicts": {
+    "recommended": "Calls tools and answers from the result, at the dtype marked usable.",
+    "not-for-tools": "Runs, but cannot reliably pick a tool name from a list. Fine for plain generation or as an embedding-adjacent model; do not build a tool loop on it.",
+    "untested": "Not measured by us. It may work perfectly — run chat.selfCheck() and find out on your own machine."
+  },
+  "floor": "Tool calling starts working around 0.5B. Below that, a model primed with open call syntax invents tool names rather than choosing one."
+}

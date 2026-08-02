@@ -1,0 +1,54 @@
+---
+title: Which models actually work
+description: Measured results for tool calling in the browser, per model and per quantization — produced by a real-weights harness, not curated by hand.
+---
+
+{/* GENERATED from data/verified-models.json by scripts/gen-verified-page.mjs — do not edit. */}
+
+Every row here was produced by `npm run test:models` against **real weights**, asking
+3 questions whose answers are unguessable tokens — so a correct reply proves a tool
+call really happened rather than the model guessing well.
+
+Measured **2026-08-02** on **cpu**, library **0.7.0**.
+
+| Model | Params | q4 | q8 | fp16 |
+|---|---|---|---|---|
+| [onnx-community/Qwen3-0.6B-ONNX](https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX) | 0.6B | ✅ usable · 3/3 | ✅ usable · 3/3 | ❌ broken · 0/3 |
+| [onnx-community/Qwen2.5-0.5B-Instruct](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct) | 0.5B | ✅ usable · 3/3 | ⚠️ poor · 2/3 | ⚠️ flaky · 3/3 |
+| [HuggingFaceTB/SmolLM2-360M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) | 0.36B | ❌ 0/3 · 0/3 | ❌ 0/3 · 0/3 | ❌ 0/3 · 0/3 |
+
+### Why the marked ones fail
+
+- **onnx-community/Qwen3-0.6B-ONNX @ fp16** — Transformers.js throws 'Tensor.data must be a typed array (4) for float16 tensors' on this model — a runtime defect, not a model one.
+- **onnx-community/Qwen2.5-0.5B-Instruct @ q8** — Inline it emits \{"name": "rain"\} — a tool that does not exist. Stepwise escalation gets it calling 2/3, but it still answers from its own guess instead of the tool result.
+- **onnx-community/Qwen2.5-0.5B-Instruct @ fp16** — Read a tool result of 1096637 back as 109,663,700.
+
+## Reading this table
+
+**Only models we measured appear here.** Anything else is untested rather than bad —
+It may work perfectly — run chat.selfCheck() and find out on your own machine.
+
+**Tool calling starts working around 0.5B. Below that, a model primed with open call syntax invents tool names rather than choosing one.**
+
+The important thing this table shows is that **the best quantization is model-specific and
+does not transfer**: Qwen2.5-0.5B is reliable at q4 and poor at q8, while Qwen3-0.6B is fine
+at both and broken at fp16. There is no ordering that wins everywhere, which is exactly why
+[`loadForTools()`](/browser-llm-nexus/tool-calling/#just-give-me-a-model-that-calls-tools)
+measures instead of assuming.
+
+## Check your own model
+
+This table cannot cover a model you converted yourself or loaded from your own host. Ask it
+directly — one throwaway tool, one unguessable token, a few seconds:
+
+```ts
+const chat = await NexusChat.loadForTools(source);  // picks a working dtype, or throws
+const check = await chat.selfCheck();
+// { ok, called, grounded, needed_forcing, dtype, detail }
+```
+
+To reproduce this whole table locally:
+
+```bash
+npm run test:models
+```
