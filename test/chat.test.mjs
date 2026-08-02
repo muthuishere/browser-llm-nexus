@@ -717,3 +717,125 @@ test('repetitionPenalty is overridable, including off', async () => {
   await chat.chat('hi', { repetitionPenalty: 1 });
   assert.equal(llm.generated.at(-1).opts.repetition_penalty, 1);
 });
+
+// ── loadForTools ────────────────────────────────────────────────────────────
+// The dtype a host serves and the dtype that can call a tool are different
+// facts. load() answers the first; this answers the second, which is the only
+// one a caller actually cares about.
+
+/** Serve `have` dtypes over HEAD; behaviour per dtype comes from `byDtype`. */
+function dtypeWorld({ have = ['q4', 'q8'], byDtype = {} } = {}) {
+  const originalFetch = globalThis.fetch;
+  const FILES = { q4: 'model_q4.onnx', q8: 'model_quantized.onnx', fp16: 'model_fp16.onnx', fp32: 'model.onnx' };
+  globalThis.fetch = async (url) => {
+    const served = have.some((d) => String(url).endsWith(FILES[d]));
+    return new Response(null, { status: served ? 200 : 404 });
+  };
+  const seen = [];
+  const disposed = [];
+  const transformers = {
+    env: { allowRemoteModels: false, allowLocalModels: true, localModelPath: 'https://host/models/', backends: { onnx: { wasm: {} } } },
+    async pipeline(_task, _id, opts) {
+      seen.push(opts.dtype);
+      const plan = byDtype[opts.dtype] ?? { throws: true };
+      if (plan.throws) throw new Error(`cannot run ${opts.dtype}`);
+      let n = 0;
+      const gen = async () => ({ 0: { generated_text: plan.script[Math.min(n++, plan.script.length - 1)] } , length: 1 });
+      const g = async (...a) => { const r = await gen(...a); return [r[0]]; };
+      g.tokenizer = {
+        apply_chat_template: (messages) =>
+          messages.map((m) => `<|im_start|>${m.role}\n${m.content}<|im_end|>`).join('\n') + '\n<|im_start|>assistant\n',
+      };
+      g.dispose = async () => disposed.push(opts.dtype);
+      return g;
+    },
+  };
+  return { transformers, seen, disposed, restore: () => { globalThis.fetch = originalFetch; } };
+}
+
+const CALLS_OK = { script: [SENSOR(), 'The reading is QX-7731.'] };
+const NEVER_CALLS = { script: ['I cannot do that.', 'I cannot do that.', 'I cannot do that.', 'I cannot do that.'] };
+
+test('loadForTools skips a dtype that cannot call and keeps one that can', async () => {
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q4: NEVER_CALLS, q8: CALLS_OK } });
+  try {
+    const chat = await NexusChat.loadForTools(
+      { base: 'https://host/models/', id: 'stub/model' },
+      { transformers: w.transformers, device: 'wasm' },
+    );
+    assert.equal(chat.dtype, 'q8', 'settled on the dtype that works');
+    assert.deepEqual(w.seen, ['q4', 'q8'], 'tried in preference order');
+    assert.deepEqual(w.disposed, ['q4'], 'the rejected model was freed, the kept one was not');
+  } finally { w.restore(); }
+});
+
+test('loadForTools throws naming every dtype it tried, rather than returning a dud', async () => {
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q4: NEVER_CALLS, q8: NEVER_CALLS } });
+  try {
+    await assert.rejects(
+      NexusChat.loadForTools({ base: 'https://host/models/', id: 'stub/model' }, { transformers: w.transformers, device: 'wasm' }),
+      (e) => /could call a tool/.test(e.message) && /q4:/.test(e.message) && /q8:/.test(e.message),
+    );
+    assert.deepEqual(w.disposed, ['q4', 'q8'], 'nothing left resident');
+  } finally { w.restore(); }
+});
+
+test('a dtype that is served but cannot even load is a failed candidate, not a crash', async () => {
+  // fp16 throws inside the ONNX session on some runtimes despite being served.
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q8: CALLS_OK } });   // q4 throws
+  try {
+    const chat = await NexusChat.loadForTools(
+      { base: 'https://host/models/', id: 'stub/model' },
+      { transformers: w.transformers, device: 'wasm' },
+    );
+    assert.equal(chat.dtype, 'q8');
+  } finally { w.restore(); }
+});
+
+test('loadForTools reports every attempt so a UI can narrate the retry', async () => {
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q4: NEVER_CALLS, q8: CALLS_OK } });
+  const attempts = [];
+  try {
+    await NexusChat.loadForTools(
+      { base: 'https://host/models/', id: 'stub/model' },
+      { transformers: w.transformers, device: 'wasm', onAttempt: (a) => attempts.push(a) },
+    );
+    assert.deepEqual(attempts.map((a) => [a.dtype, a.ok]), [['q4', false], ['q8', true]]);
+  } finally { w.restore(); }
+});
+
+test('an explicit dtype is the only candidate, but is still verified', async () => {
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q4: NEVER_CALLS, q8: CALLS_OK } });
+  try {
+    await assert.rejects(
+      NexusChat.loadForTools(
+        { base: 'https://host/models/', id: 'stub/model' },
+        { transformers: w.transformers, device: 'wasm', dtype: 'q4' },
+      ),
+      /could call a tool/,
+    );
+    assert.deepEqual(w.seen, ['q4'], 'did not go looking past the dtype it was given');
+  } finally { w.restore(); }
+});
+
+test('allowForcing:false rejects a model that only calls when primed', async () => {
+  const forcedOnly = { script: ['I cannot do that.', SENSOR(), 'The reading is QX-7731.'] };
+  const w = dtypeWorld({ have: ['q4', 'q8'], byDtype: { q4: forcedOnly, q8: CALLS_OK } });
+  try {
+    const chat = await NexusChat.loadForTools(
+      { base: 'https://host/models/', id: 'stub/model' },
+      { transformers: w.transformers, device: 'wasm', allowForcing: false },
+    );
+    assert.equal(chat.dtype, 'q8', 'passed over the one that needed priming');
+  } finally { w.restore(); }
+});
+
+test('the failure does not recommend the model that just failed', async () => {
+  const w = dtypeWorld({ have: ['q4'], byDtype: { q4: NEVER_CALLS } });
+  try {
+    await assert.rejects(
+      NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' }, { transformers: w.transformers, device: 'wasm' }),
+      (e) => !/try onnx-community\/Qwen3-0\.6B-ONNX/.test(e.message),
+    );
+  } finally { w.restore(); }
+});

@@ -78,6 +78,7 @@ export { Hooks } from './hooks.ts';
 export {
   resolveTransformers,
   detectDtype,
+  availableDtypes,
   detectDevice,
   preferredDtypeOrder,
   DTYPE_FILES,

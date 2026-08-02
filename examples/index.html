@@ -265,7 +265,7 @@
 {
   "imports": {
     "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
-    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.5.0/dist/index.js"
+    "browser-llm-nexus": "https://cdn.jsdelivr.net/npm/browser-llm-nexus@0.6.0/dist/index.js"
   }
 }
 </script>
@@ -404,10 +404,22 @@ $('load').addEventListener('click', async () => {
   const seen = new Set();
   try {
     const t0 = performance.now();
-    chat = await NexusChat.load(source, {
+    // loadForTools, not load. load() picks the first quantization the host
+    // SERVES, which says nothing about whether it can call a tool — and that
+    // is model-specific and not guessable (Qwen2.5-0.5B calls at q4 and not at
+    // q8; Qwen3-0.6B is the reverse). This one tries them in order, verifies
+    // each against a throwaway tool, and keeps the first that actually works.
+    checking = true;
+    let lastCheck = null;
+    chat = await NexusChat.loadForTools(source, {
       transformers,                                   // injected, not fetched
       device: $('device').value,
       dtype: $('dtype').value,
+      onAttempt: (a) => {
+        lastCheck = a;
+        log((a.ok ? '✓ ' : '✗ ') + a.detail);
+        if (!a.ok) { log('  ↻ that quantization cannot call tools — trying the next one'); seen.clear(); }
+      },
       onProgress: (p) => {
         if (p.status === 'progress' && p.file) {
           $('prog').value = p.progress ?? 0;
@@ -415,6 +427,7 @@ $('load').addEventListener('click', async () => {
         }
       },
     });
+    checking = false;
 
     await applyTools();   // whatever the editor currently defines
 
@@ -445,24 +458,16 @@ $('load').addEventListener('click', async () => {
     for (const id of ['bDevice', 'bDtype', 'bModel']) $(id).classList.add('on');
     log(`✓ ready in ${((performance.now() - t0) / 1000).toFixed(1)}s — ${chat.device} / ${chat.dtype}`);
 
-    // Ask the model itself whether it can do the job. No published table covers
-    // a model someone just loaded from their own zip or host.
-    $('bCheck').textContent = 'tool calling: checking…';
-    checking = true;
+    // loadForTools already verified this model against a throwaway tool — it
+    // would have thrown rather than hand back one that cannot call. So the
+    // badge reports the verdict it reached instead of re-running it.
     try {
-      const check = await chat.selfCheck();
-      checking = false;
-      $('bCheck').textContent = check.ok
-        ? `tool calling ✓${check.needed_forcing ? ' (forced)' : ''}`
-        : 'tool calling ✗';
+      const check = lastCheck;
+      $('bCheck').textContent = `tool calling ✓${check?.needed_forcing ? ' (forced)' : ''}`;
       $('bCheck').classList.add('on');
-      $('bCheck').style.color = check.ok ? 'var(--ok)' : 'var(--warn)';
-      $('bCheck').style.borderColor = check.ok ? 'var(--ok)' : 'var(--warn)';
-      $('bCheck').title = check.detail;
-      log((check.ok ? '✓ ' : '✗ ') + check.detail);
-      if (!check.ok) {
-        log('  → try another Quantization above, or a bigger model.');
-      }
+      $('bCheck').style.color = 'var(--ok)';
+      $('bCheck').style.borderColor = 'var(--ok)';
+      $('bCheck').title = check?.detail ?? '';
       rounds = [];
       renderDiag();
     } catch (e) {
@@ -475,8 +480,19 @@ $('load').addEventListener('click', async () => {
     refreshMetrics();
     refreshCache();
   } catch (e) {
+    checking = false;
     const msg = String(e?.message ?? e);
     log('✗ ' + msg);
+    // Every quantization was tried and none could call a tool. That is a
+    // verdict about the model, not a transport error, so say so plainly rather
+    // than leaving it in with a warning badge and a broken demo.
+    if (/could call a tool/.test(msg)) {
+      $('bCheck').textContent = 'tool calling ✗';
+      $('bCheck').classList.add('on');
+      $('bCheck').style.color = 'var(--warn)';
+      $('bCheck').style.borderColor = 'var(--warn)';
+      log('  → no quantization of this model can call tools. Try a bigger model — Qwen3-0.6B works.');
+    }
     // "Failed to fetch" says nothing. The usual cause here is a hosted page
     // reaching a converter on the user's own machine, which the browser gates
     // behind a local-network permission.
@@ -601,7 +617,9 @@ function buildSnippet() {
 import { NexusChat } from 'browser-llm-nexus';
 
 // ${notes[kind]}
-const chat = await NexusChat.load(${sourceLiteral()}${optStr});
+// loadForTools verifies the model can actually call one, and moves to the
+// next quantization if it can't. Throws rather than hand you a dud.
+const chat = await NexusChat.loadForTools(${sourceLiteral()}${optStr});
 
 // your tools — one file, any number of them
 await chat.evalTools(toolsSource);

@@ -1,7 +1,7 @@
 import { Hooks } from './hooks.ts';
 import { Metrics } from './metrics.ts';
 import { parseToolCalls, salvageToolCall, stripCallFragments, stripThinking, type ToolCall } from './toolcalls.ts';
-import { resolveTransformers, detectDtype, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
+import { resolveTransformers, detectDtype, availableDtypes, detectDevice, type Device, type RuntimeOptions, type TransformersLike } from './runtime.ts';
 import { dtypeProbe, resolveSource, type ModelSource } from './source.ts';
 
 export type ToolHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -168,6 +168,82 @@ export class NexusChat extends Hooks<ChatEvents> {
     const chat = new NexusChat(generator, dtype, device, tjs, modelId);
     chat.metrics.time('load', Date.now() - t0);
     return chat;
+  }
+
+  /** Load a model that provably calls tools — or fail loudly saying nothing did.
+   *
+   *  `load()` picks the first dtype the host *serves*, which is a statement
+   *  about the host and not about whether anything works. This asks the only
+   *  question that matters: it loads a candidate, runs {@link selfCheck} against
+   *  a throwaway tool returning an unguessable token, and keeps the first one
+   *  that both calls the tool and answers from its result. A candidate that
+   *  fails is disposed before the next is tried, so only one model is resident.
+   *
+   *      const chat = await NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+   *
+   *  Pass an explicit `dtype` and that is the only candidate — this still tells
+   *  you whether it works, it just will not go looking for another. Every
+   *  attempt is reported through `onAttempt` so a UI can narrate the retry
+   *  rather than appear to hang on a second download.
+   *
+   *  Cost is the honest tradeoff: a rejected candidate was still downloaded.
+   *  Weights are cached, so it is paid once per dtype per browser. */
+  static async loadForTools(
+    source: ModelSource,
+    opts: LoadOptions & {
+      /** Called after each candidate is judged, pass or fail. */
+      onAttempt?: (check: ToolCallCheck) => void;
+      /** Accept a model that only calls when the syntax is primed. Default true —
+       *  forcing is a supported path, not a defect. Set false to demand a model
+       *  that volunteers the call unaided. */
+      allowForcing?: boolean;
+    } = {},
+  ): Promise<NexusChat> {
+    const tjs = await resolveTransformers(opts);
+    const modelId = await resolveSource(tjs, source);
+    const device = await detectDevice(opts.device ?? 'auto');
+    const candidates =
+      opts.dtype && opts.dtype !== 'auto'
+        ? [opts.dtype]
+        : await availableDtypes(tjs, modelId, device, dtypeProbe(source, tjs));
+
+    const tried: ToolCallCheck[] = [];
+    for (const dtype of candidates) {
+      let chat: NexusChat;
+      try {
+        chat = await NexusChat.load(source, { ...opts, dtype, transformers: tjs });
+      } catch (err) {
+        // A dtype the host serves can still fail to run — fp16 on some
+        // runtimes throws inside the session rather than 404ing. That is a
+        // failed candidate, not a failed load.
+        tried.push({
+          ok: false, called: false, grounded: false, needed_forcing: false,
+          model: modelId, device, dtype, answer: '',
+          detail: `${modelId} (${device}/${dtype}) failed to load: ${(err as Error).message}`,
+        });
+        opts.onAttempt?.(tried[tried.length - 1]!);
+        continue;
+      }
+      const check = await chat.selfCheck();
+      tried.push(check);
+      opts.onAttempt?.(check);
+      if (check.ok && (opts.allowForcing !== false || !check.needed_forcing)) {
+        chat.metrics.count('dtypes_rejected', tried.length - 1);
+        return chat;
+      }
+      await chat.dispose();
+    }
+
+    // Suggesting the model that just failed reads as a bug, so only name it
+    // when it is not the one in hand.
+    const KNOWN_GOOD = 'onnx-community/Qwen3-0.6B-ONNX';
+    throw new Error(
+      `no dtype of ${modelId} could call a tool on ${device}. Tried:\n` +
+        tried.map((t) => `  ${t.dtype}: ${t.detail}`).join('\n') +
+        (modelId.includes(KNOWN_GOOD)
+          ? ''
+          : `\nModels below ~0.5B generally cannot pick a tool name from a list; try ${KNOWN_GOOD}.`),
+    );
   }
 
   /** Register a tool. Properties accept shorthand: { city: 'string' }. */

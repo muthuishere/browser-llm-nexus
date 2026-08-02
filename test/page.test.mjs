@@ -351,7 +351,7 @@ test('a passing model is reported on the badge and in the log', async () => {
   assert.match(p.$('log').textContent, /calls tools correctly/);
 });
 
-test('a failing model is called out, with what to do about it', async () => {
+test('a model no quantization can rescue fails the load, rather than loading broken', async () => {
   const cc = mockChatClass();
   cc.state.selfCheck = {
     ok: false, called: false, grounded: false, needed_forcing: false,
@@ -364,7 +364,9 @@ test('a failing model is called out, with what to do about it', async () => {
 
   assert.match(p.$('bCheck').textContent, /tool calling ✗/);
   assert.match(p.$('log').textContent, /does not call tools/);
-  assert.match(p.$('log').textContent, /try another Quantization/i);
+  assert.match(p.$('log').textContent, /Try a bigger model/i);
+  // The whole point: you are not left with a chat box that cannot work.
+  assert.equal(p.$('ask').disabled, true, 'asking stays disabled');
 });
 
 test('a model that only calls under forcing says so', async () => {

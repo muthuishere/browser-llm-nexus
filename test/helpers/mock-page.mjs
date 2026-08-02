@@ -32,6 +32,18 @@ export function mockChatClass({ script = ['answer'], device = 'wasm', dtype = 'q
       if (state.failNext) { state.failNext = false; throw new Error('boom'); }
       return new MockChat();
     }
+    /** Mirrors the real contract: verify, report the attempt, throw on a dud. */
+    static async loadForTools(source, opts = {}) {
+      const chat = await MockChat.load(source, opts);
+      const check = await chat.selfCheck();
+      opts.onAttempt?.(check);
+      if (!check.ok) {
+        throw new Error(
+          `no dtype of ${chat.modelId} could call a tool on ${chat.device}. Tried:\n  ${check.dtype}: ${check.detail}`,
+        );
+      }
+      return chat;
+    }
     async evalTools(code) {
       this.tools.clear();
       const register = (name, d, p, h) => this.tools.set(name, { d, p, h });

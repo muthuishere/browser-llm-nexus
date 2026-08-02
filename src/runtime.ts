@@ -81,26 +81,46 @@ export async function detectDtype(
   device = 'wasm',
   probe?: DtypeProbe,
 ): Promise<string> {
+  return (await availableDtypes(tjs, modelId, device, probe))[0]!;
+}
+
+/** Every dtype variant the source actually serves, best-first.
+ *
+ *  This answers "what is on the host", which is NOT the same question as "what
+ *  works". Availability is knowable from a HEAD request; whether a model can
+ *  call a tool at a given quantization is only knowable by running it — the two
+ *  come apart badly, and in both directions (Qwen2.5-0.5B calls tools at q4 and
+ *  not at q8; Qwen3-0.6B is the reverse). `detectDtype` takes the first of
+ *  these and hopes; {@link NexusChat.loadForTools} walks the whole list and
+ *  verifies. */
+export async function availableDtypes(
+  tjs: TransformersLike,
+  modelId: string,
+  device = 'wasm',
+  probe?: DtypeProbe,
+): Promise<string[]> {
   const base: string | undefined = tjs.env.localModelPath;
   if (!probe && !base) throw new Error('cannot probe dtypes without a base URL — pass an explicit dtype');
   const at: DtypeProbe =
     probe ?? ((file) => `${base}${base!.endsWith('/') ? '' : '/'}${modelId}/onnx/${file}`);
+  const found: string[] = [];
   for (const d of preferredDtypeOrder(device)) {
     const path = at(DTYPE_FILES[d]!);
     const httpBase = /^https?:\/\//.test(path);
     try {
       if (httpBase) {
         const res = await fetch(path, { method: 'HEAD' });
-        if (res.ok) return d;
+        if (res.ok) found.push(d);
       } else {
         // Filesystem base (Node): probing over fetch would not work.
         // Specifier via a variable so bundlers and browser builds ignore it.
         const nodeFs = 'node:fs/promises';
         const { stat } = (await import(/* @vite-ignore */ nodeFs)) as { stat: (p: string) => Promise<unknown> };
         await stat(path);
-        return d;
+        found.push(d);
       }
     } catch { /* keep probing */ }
   }
-  throw new Error(`no dtype variant found for ${modelId} under ${at('onnx/')}`);
+  if (!found.length) throw new Error(`no dtype variant found for ${modelId} under ${at('onnx/')}`);
+  return found;
 }

@@ -86,6 +86,49 @@ enough" is how that goes wrong. You get the model's original answer, plus a
 `tool_calls_force_failed` metric and a `forced` event carrying the raw text.
 :::
 
+## Just give me a model that calls tools
+
+`load()` picks the first quantization the host **serves**. That is a fact about the host and
+says nothing about whether the model can call a tool — and which quantization works is
+model-specific and inverted between models, so there is nothing to guess with.
+
+`loadForTools()` asks the only question you care about. It loads a candidate, verifies it
+against a throwaway tool returning an unguessable token, and keeps the first one that both
+calls the tool and answers from the result:
+
+```ts
+const chat = await NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+chat.tool('get_weather', 'Current weather', { city: 'string' }, getWeather);
+
+await chat.chat('Weather in Chennai?');   // the model is already proven to call
+```
+
+A rejected candidate is disposed before the next is tried, so only one model is ever
+resident. If **nothing** works it throws, naming every dtype and why each failed — it will
+not hand you a chat object that silently cannot do the job:
+
+```
+no dtype of HuggingFaceTB/SmolLM2-360M-Instruct could call a tool on cpu. Tried:
+  q4: ... does not call tools. Try another quantization, or a larger model.
+  q8: ... does not call tools. Try another quantization, or a larger model.
+Models below ~0.5B generally cannot pick a tool name from a list; try onnx-community/Qwen3-0.6B-ONNX.
+```
+
+Narrate the retry so a second download doesn't look like a hang, and tighten the bar if you
+want a model that volunteers calls without priming:
+
+```ts
+await NexusChat.loadForTools(source, {
+  onAttempt: (a) => console.log(a.dtype, a.ok, a.detail),
+  allowForcing: false,        // reject models that only call when the syntax is primed
+  dtype: 'q4',                // still verified — just not retried past
+});
+```
+
+The tradeoff is honest: a rejected candidate was still downloaded. Weights are cached, so
+it is paid once per dtype per browser. If you already know the answer for your model — run
+`npm run test:models` once — pass `dtype` and skip the search.
+
 ## When the model loops instead of answering
 
 Decoding is greedy (`do_sample: false`) — deterministic, which is what you want when the
@@ -115,15 +158,16 @@ unguessable, so a correct reply proves a real call happened:
 | Model | q4 | q8 | fp16 |
 |---|---|---|---|
 | Qwen2.5-0.5B-Instruct | **3/3 usable** | 0/3 | 2/3 flaky |
-| Qwen3-0.6B-ONNX | 2/3 flaky | **3/3 usable** | 0/3 |
+| Qwen3-0.6B-ONNX | **3/3 usable** | **3/3 usable** | 0/3 |
 | SmolLM2-360M-Instruct | 0/3 | 0/3 | 0/3 |
 
 Three things worth taking from that table.
 
 **The best quantization is model-specific.** Qwen2.5 is reliable at `q4` and
-useless at `q8`; Qwen3 is the exact reverse. There is no ordering that wins
-everywhere, so `auto` picks `q4` first — the best single default, not a
-guarantee — and you should verify your own combination.
+useless at `q8`. There is no ordering that wins everywhere, so `auto` picks `q4`
+first — the best single default, not a guarantee. Rather than trusting either the
+default or this table, use [`loadForTools()`](#just-give-me-a-model-that-calls-tools),
+which measures it on the machine the model is actually running on.
 
 **360M is below the floor.** SmolLM2-360M never produced a usable call at any
 quantization; primed with open call syntax it invented tool names and

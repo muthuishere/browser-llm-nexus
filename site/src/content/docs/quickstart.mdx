@@ -28,6 +28,20 @@ console.log(chat.device);   // 'webgpu' or 'wasm' — whichever this browser can
 console.log(chat.dtype);    // 'fp16' | 'q4' | 'q8' | 'fp32'
 ```
 
+:::tip[If you're here for tool calling, use `loadForTools`]
+`load()` takes the first quantization the host serves, which does not mean the model can
+call a tool at it — and which one works differs per model. `loadForTools()` verifies each
+candidate against a throwaway tool and keeps the first that genuinely works, or throws
+saying nothing did:
+
+```ts
+const chat = await NexusChat.loadForTools({ hub: 'onnx-community/Qwen3-0.6B-ONNX' });
+```
+
+Same object, same API — it just won't hand you one that can't do the job. See
+[Tool calling](/browser-llm-nexus/tool-calling/#just-give-me-a-model-that-calls-tools).
+:::
+
 Loading weights takes a while the first time. Show progress:
 
 ```ts
